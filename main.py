@@ -375,38 +375,48 @@ async def on_message(message):
     if message.guild is not None:
         # --- COOLER AFK SYSTEM: RETURN FROM AFK ---
         key = (message.guild.id, message.author.id)
-        if key in afk_users and not message.content.startswith(bot.command_prefix + "afk"):
-            data = afk_users.pop(key)
-            save_afk()
+        if key in afk_users:
+            is_afk_cmd = message.content.startswith(bot.command_prefix + "afk")
+            is_any_cmd = message.content.startswith(bot.command_prefix)
 
-            try:
-                if data.get("old_nick") is not None or (message.author.nick and message.author.nick.startswith("💤")):
-                    await message.author.edit(nick=data.get("old_nick"))
-            except (discord.Forbidden, discord.HTTPException):
-                pass
+            if not is_afk_cmd:
+                # Any message that isn't $afk → clear AFK state
+                data = afk_users.pop(key)
+                save_afk()
 
-            try:
-                new_activities = [a for a in message.author.activities if not isinstance(a, discord.CustomActivity)]
-                await message.author.edit(activities=new_activities)
-            except Exception:
-                pass
+                # Always silently reset nickname and activities
+                try:
+                    if data.get("old_nick") is not None or (message.author.nick and message.author.nick.startswith("💤")):
+                        await message.author.edit(nick=data.get("old_nick"))
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
 
-            try:
-                away = humanize_seconds(time.time() - data.get("since", time.time()))
-                embed = discord.Embed(
-                    title="👋  Welcome Back!",
-                    color=discord.Color.from_rgb(87, 242, 135),
-                )
-                embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
-                embed.add_field(name="⏱️ You were away for", value=f"**{away}**", inline=True)
-                if data.get("reason") and data["reason"] != "AFK":
-                    embed.add_field(name="📝 Your reason was", value=f"*{data['reason']}*", inline=True)
-                if data.get("image_url"):
-                    embed.set_thumbnail(url=data["image_url"])
-                embed.set_footer(text="Glad to have you back!")
-                await message.channel.send(embed=embed)
-            except discord.Forbidden:
-                pass
+                try:
+                    new_activities = [a for a in message.author.activities if not isinstance(a, discord.CustomActivity)]
+                    await message.author.edit(activities=new_activities)
+                except Exception:
+                    pass
+
+                # Only send "Welcome Back" embed for regular chat messages, not commands.
+                # Commands already produce their own response — sending the embed too
+                # would make it look like the command responded twice.
+                if not is_any_cmd:
+                    try:
+                        away = humanize_seconds(time.time() - data.get("since", time.time()))
+                        embed = discord.Embed(
+                            title="👋  Welcome Back!",
+                            color=discord.Color.from_rgb(87, 242, 135),
+                        )
+                        embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
+                        embed.add_field(name="⏱️ You were away for", value=f"**{away}**", inline=True)
+                        if data.get("reason") and data["reason"] != "AFK":
+                            embed.add_field(name="📝 Your reason was", value=f"*{data['reason']}*", inline=True)
+                        if data.get("image_url"):
+                            embed.set_thumbnail(url=data["image_url"])
+                        embed.set_footer(text="Glad to have you back!")
+                        await message.channel.send(embed=embed)
+                    except discord.Forbidden:
+                        pass
 
         # --- COOLER AFK SYSTEM: PINGING AN AFK USER ---
         if message.mentions:
