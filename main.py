@@ -367,7 +367,7 @@ async def on_member_join(member):
     except discord.Forbidden:
         pass
 
-@bot.event
+@bot.listen('on_message')
 async def on_message(message):
     if message.author == bot.user or message.author.bot:
         return
@@ -378,15 +378,13 @@ async def on_message(message):
         if key in afk_users and not message.content.startswith(bot.command_prefix + "afk"):
             data = afk_users.pop(key)
             save_afk()
-            
-            # Reset Nickname
+
             try:
-                if data.get("old_nick") is not None or (message.author.nick and message.author.nick.startswith("[AFK]")):
+                if data.get("old_nick") is not None or (message.author.nick and message.author.nick.startswith("💤")):
                     await message.author.edit(nick=data.get("old_nick"))
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-            # Reset Discord Status (The "Cool" part)
             try:
                 new_activities = [a for a in message.author.activities if not isinstance(a, discord.CustomActivity)]
                 await message.author.edit(activities=new_activities)
@@ -414,13 +412,13 @@ async def on_message(message):
         if message.mentions:
             mentioned_msgs = []
             raw_mentions = re.findall(r'<@!?(\d+)>', message.content)
-            
+
             for u in message.mentions:
                 k = (message.guild.id, u.id)
                 if k in afk_users and u.id != message.author.id and str(u.id) in raw_mentions:
                     info = afk_users[k]
                     away = humanize_seconds(time.time() - info.get("since", time.time()))
-                    
+
                     ping_embed = discord.Embed(
                         title="💤  This person is AFK",
                         color=discord.Color.from_rgb(88, 101, 242),
@@ -432,7 +430,7 @@ async def on_message(message):
                     if info.get("image_url"):
                         ping_embed.set_thumbnail(url=info["image_url"])
                     mentioned_msgs.append(ping_embed)
-            
+
             for embed in mentioned_msgs:
                 try:
                     await message.channel.send(embed=embed)
@@ -443,7 +441,7 @@ async def on_message(message):
     if "shit" in message.content.lower():
         try:
             await message.delete()
-            await message.channel.send(f"{message.author.mention} - dont use that word!")
+            await message.channel.send(f"{message.author.mention} - don't use that word!")
         except discord.Forbidden:
             pass
         return
@@ -462,7 +460,6 @@ async def on_message(message):
                 f"🎉 {message.author.mention} got it in **{game['tries']}** tries! The number was **{game['number']}**."
             )
             number_games.pop(message.channel.id, None)
-        await bot.process_commands(message)
         return
 
     if message.channel.id in hangman_games and len(message.content.strip()) == 1 and message.content.strip().isalpha():
@@ -488,7 +485,6 @@ async def on_message(message):
                 hangman_games.pop(message.channel.id, None)
             else:
                 await message.channel.send(render_hangman(game))
-        await bot.process_commands(message)
         return
 
     # --- PASSIVE XP ---
@@ -506,8 +502,6 @@ async def on_message(message):
             message_cooldowns[key] = now
             if after_level > before_level:
                 await announce_level_up(message.author, message.channel, after_level, "message")
-
-    await bot.process_commands(message)
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -641,7 +635,7 @@ async def clear_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Messages permission to use this.")
     elif isinstance(error, commands.BadArgument) or isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !clear <number between 1 and 100>")
+        await ctx.send("Usage: $clear <number between 1 and 100>")
 
 # --- LEVELING COMMANDS ---
 
@@ -755,7 +749,7 @@ async def top(ctx, category: str = "total"):
 
     category = category.lower()
     if category not in ("total", "message", "messages", "text", "voice"):
-        await ctx.send("Usage: `!top [total|message|voice]`")
+        await ctx.send("Usage: `$top [total|message|voice]`")
         return
 
     if category in ("message", "messages", "text"):
@@ -863,7 +857,7 @@ async def say_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Messages permission to use this.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !say <message>")
+        await ctx.send("Usage: $say <message>")
 
 @bot.command()
 @commands.has_permissions(kick_members=True)
@@ -887,7 +881,7 @@ async def kick_error(ctx, error):
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !kick @member [reason]")
+        await ctx.send("Usage: $kick @member [reason]")
 
 @bot.command()
 @commands.has_permissions(ban_members=True)
@@ -911,7 +905,7 @@ async def ban_error(ctx, error):
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !ban @member [reason]")
+        await ctx.send("Usage: $ban @member [reason]")
 
 @bot.command()
 @commands.has_permissions(ban_members=True)
@@ -930,7 +924,7 @@ async def unban_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Ban Members permission.")
     elif isinstance(error, (commands.BadArgument, commands.MissingRequiredArgument)):
-        await ctx.send("Usage: !unban <user_id> [reason]")
+        await ctx.send("Usage: $unban <user_id> [reason]")
 
 @bot.command()
 @commands.has_permissions(moderate_members=True)
@@ -952,7 +946,7 @@ async def mute_error(ctx, error):
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !mute @member [minutes] [reason]")
+        await ctx.send("Usage: $mute @member [minutes] [reason]")
 
 @bot.command()
 @commands.has_permissions(moderate_members=True)
@@ -970,7 +964,7 @@ async def unmute_error(ctx, error):
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !unmute @member")
+        await ctx.send("Usage: $unmute @member")
 
 @bot.command()
 @commands.has_permissions(kick_members=True)
@@ -995,7 +989,7 @@ async def warn_error(ctx, error):
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !warn @member [reason]")
+        await ctx.send("Usage: $warn @member [reason]")
 
 @bot.command()
 async def warnings(ctx, member: discord.Member = None):
@@ -1033,7 +1027,7 @@ async def eight_ball(ctx, *, question: str):
 @eight_ball.error
 async def eight_ball_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !8ball <question>")
+        await ctx.send("Usage: $8ball <question>")
 
 @bot.command()
 async def coinflip(ctx):
@@ -1066,7 +1060,7 @@ async def nickname_error(ctx, error):
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !nickname @member [new nickname]  (omit to reset)")
+        await ctx.send("Usage: $nickname @member [new nickname]  (omit to reset)")
 
 @bot.command(name="timeout")
 @commands.has_permissions(moderate_members=True)
@@ -1094,7 +1088,7 @@ async def createchannel_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Channels permission.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !createchannel <text|voice> <name>")
+        await ctx.send("Usage: $createchannel <text|voice> <name>")
 
 @bot.command(name="deletechannel")
 @commands.has_permissions(manage_channels=True)
@@ -1133,7 +1127,7 @@ async def addrole_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Roles permission.")
     elif isinstance(error, (commands.MissingRequiredArgument, commands.RoleNotFound, commands.MemberNotFound)):
-        await ctx.send("Usage: !addrole @member <role name>")
+        await ctx.send("Usage: $addrole @member <role name>")
 
 @bot.command(name="removerole")
 @commands.has_permissions(manage_roles=True)
@@ -1155,7 +1149,7 @@ async def removerole_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Roles permission.")
     elif isinstance(error, (commands.MissingRequiredArgument, commands.RoleNotFound, commands.MemberNotFound)):
-        await ctx.send("Usage: !removerole @member <role name>")
+        await ctx.send("Usage: $removerole @member <role name>")
 
 @bot.command()
 @commands.has_permissions(manage_guild=True)
@@ -1201,13 +1195,13 @@ async def giveaway_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Server permission to start a giveaway.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("Usage: !giveaway <duration> <prize>  (e.g. `!giveaway 5m Nitro`)")
+        await ctx.send("Usage: $giveaway <duration> <prize>  (e.g. `$giveaway 5m Nitro`)")
 
 @bot.command()
 async def rps(ctx, choice: str = None):
     options = ["rock", "paper", "scissors"]
     if not choice or choice.lower() not in options:
-        await ctx.send("Usage: !rps <rock|paper|scissors>")
+        await ctx.send("Usage: $rps <rock|paper|scissors>")
         return
     user = choice.lower()
     bot_choice = random.choice(options)
@@ -1225,12 +1219,12 @@ number_games = {}
 @bot.command()
 async def guess(ctx):
     if ctx.channel.id in number_games:
-        await ctx.send("A number guessing game is already running here. Type `!stopgame` to end it.")
+        await ctx.send("A number guessing game is already running here. Type `$stopgame` to end it.")
         return
     number_games[ctx.channel.id] = {"number": random.randint(1, 100), "tries": 0, "host": ctx.author.id}
     await ctx.send(
         "🎯 I picked a number between **1** and **100**.\n"
-        "Send your guesses in chat. Type `!stopgame` to give up."
+        "Send your guesses in chat. Type `$stopgame` to give up."
     )
 
 @bot.command()
@@ -1310,13 +1304,13 @@ def render_hangman(game):
         f"{HANGMAN_STAGES[len(game['wrong'])]}\n"
         f"Word: `{revealed}`\n"
         f"Wrong guesses ({len(game['wrong'])}/6): {wrong}\n"
-        f"Type a single letter to guess, or `!stopgame` to give up."
+        f"Type a single letter to guess, or `$stopgame` to give up."
     )
 
 @bot.command()
 async def hangman(ctx):
     if ctx.channel.id in hangman_games:
-        await ctx.send("A hangman game is already running here. Use `!stopgame` to end it.")
+        await ctx.send("A hangman game is already running here. Use `$stopgame` to end it.")
         return
     word = random.choice(HANGMAN_WORDS).lower()
     hangman_games[ctx.channel.id] = {"word": word, "guessed": set(), "wrong": set()}
@@ -2540,7 +2534,7 @@ async def card(ctx):
 async def rpsls(ctx, choice: str = None):
     options = ["rock", "paper", "scissors", "lizard", "spock"]
     if not choice or choice.lower() not in options:
-        await ctx.send("Usage: `!rpsls <rock|paper|scissors|lizard|spock>`")
+        await ctx.send("Usage: `$rpsls <rock|paper|scissors|lizard|spock>`")
         return
     user = choice.lower()
     bot_choice = random.choice(options)
@@ -2773,7 +2767,7 @@ async def shop(ctx):
     embed = discord.Embed(title="🛒 Shop", color=discord.Color.green())
     for item in SHOP:
         embed.add_field(name=f"{item['emoji']} {item['name']}", value=f"{item['price']:,} coins", inline=True)
-    embed.set_footer(text="Buy with !buy <item> • Sell with !sell <item>")
+    embed.set_footer(text="Buy with $buy <item> • Sell with $sell <item>")
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -2781,7 +2775,7 @@ async def buy(ctx, *, item: str):
     item = item.lower()
     found = next((i for i in SHOP if i["name"] == item), None)
     if not found:
-        await ctx.send("Item not in shop. Use `!shop`.")
+        await ctx.send("Item not in shop. Use `$shop`.")
         return
     e = get_econ(ctx.guild.id, ctx.author.id)
     if e["wallet"] < found["price"]:
@@ -2972,7 +2966,7 @@ async def about(ctx):
         description="A multipurpose Discord bot built with discord.py — moderation, leveling, fun, games, music, economy and more.",
         color=discord.Color.blurple(),
     )
-    embed.add_field(name="Commands", value="Use `!help` to see them all.", inline=False)
+    embed.add_field(name="Commands", value="Use `$help` to see them all.", inline=False)
     embed.add_field(name="Uptime", value=fmt_uptime(time.time() - START_TIME), inline=False)
     await ctx.send(embed=embed)
 
