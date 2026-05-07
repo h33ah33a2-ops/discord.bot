@@ -3399,7 +3399,7 @@ async def on_member_join(member):
         )
         
         # Sets the big GIF/image in the embed
-        embed.set_image(url=https://cdn.discordapp.com/attachments/1474097126622498982/1502022235399913682/D58D55D1-FEF0-4D05-B816-32AC5E1BBBB1.gif?ex=69fe32b7&is=69fce137&hm=2f0d6ae9310748ebf248536bff6d72a6da9e17fe892fecde52f7fc9a400b34e8&)
+        embed.set_image(url="https://cdn.discordapp.com/attachments/1474097126622498982/1502022235399913682/D58D55D1-FEF0-4D05-B816-32AC5E1BBBB1.gif?ex=69fe32b7&is=69fce137&hm=2f0d6ae9310748ebf248536bff6d72a6da9e17fe892fecde52f7fc9a400b34e8&")
         
         # Sets their profile picture as a small thumbnail
         embed.set_thumbnail(url=member.display_avatar.url)
