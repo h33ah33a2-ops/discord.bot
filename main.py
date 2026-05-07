@@ -297,9 +297,8 @@ async def on_message(message):
 
             # Reset Discord Status (The "Cool" part)
             try:
-                # We check current activities to clear the custom status without wiping Spotify/Game statuses
                 new_activities = [a for a in message.author.activities if not isinstance(a, discord.CustomActivity)]
-                await message.author.edit.activities=new_activities
+                await message.author.edit(activities=new_activities)
             except Exception:
                 pass
 
@@ -318,12 +317,10 @@ async def on_message(message):
         # --- COOLER AFK SYSTEM: PINGING AN AFK USER ---
         if message.mentions:
             mentioned_msgs = []
-            # Regex to find actual raw mentions like <@123456789> to prevent substring false-positives
             raw_mentions = re.findall(r'<@!?(\d+)>', message.content)
             
             for u in message.mentions:
                 k = (message.guild.id, u.id)
-                # Ensure they were actually pinged with a raw mention, not just talked about
                 if k in afk_users and u.id != message.author.id and str(u.id) in raw_mentions:
                     info = afk_users[k]
                     away = humanize_seconds(time.time() - info.get("since", time.time()))
@@ -2821,15 +2818,6 @@ async def afk(ctx, *, reason: str = "AFK"):
     embed.set_footer(text="I'll set your status and let people know when they ping you. Send any message to come back.")
     await ctx.send(embed=embed)
 
-# Easter egg command for AFK
-@bot.command()
-async def poke(ctx, member: discord.Member):
-    key = (ctx.guild.id, member.id)
-    if key in afk_users:
-        await ctx.send(f"🧱 You poked {member.display_name}, but they are AFK. *Talking to a brick wall...*")
-    else:
-        await ctx.send(f"👉 You poked {member.mention}!")
-
 @bot.command()
 async def github(ctx, user: str):
     await ctx.send(f"🐙 https://github.com/{user}")
@@ -2960,7 +2948,6 @@ HELP_CATEGORIES = [
         ("!vote <question>", "Create a 👍/👎/🤷 vote."),
         ("!suggest <text>", "Post a suggestion embed for voting."),
         ("!afk [reason]", "Mark yourself as AFK. Supports image attachments!"),
-        ("!poke @member", "Poke a member (Easter egg if they are AFK)."),
         ("!github <user>", "Link to a GitHub profile."),
         ("!youtube <query>", "YouTube search link."),
         ("!google <query>", "Google search link."),
@@ -3201,56 +3188,4 @@ async def secret_error(ctx, error):
     if isinstance(error, commands.MissingRole):
         await ctx.send("You do not have permission to do that!")
 
-
-
-
-import discord
-import sqlite3
-from discord.ext import commands
-
-bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
-
-# Helper function to run queries
-def update_db(query, args=()):
-    conn = sqlite3.connect('bot_data.db')
-    cursor = conn.cursor()
-    cursor.execute(query, args)
-    conn.commit()
-    conn.close()
-
-def get_db(query, args=()):
-    conn = sqlite3.connect('bot_data.db')
-    cursor = conn.cursor()
-    cursor.execute(query, args)
-    result = cursor.fetchone()
-    conn.close()
-    return result
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    user_id = message.author.id
-    guild_id = message.guild.id
-
-    # Check if user exists, if not, add them
-    user = get_db("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    
-    if user is None:
-        update_db("INSERT INTO users (user_id, guild_id, xp) VALUES (?, ?, ?)", (user_id, guild_id, 10))
-    else:
-        # Give them 10 XP for the message
-        update_db("UPDATE users SET xp = xp + 10 WHERE user_id = ?", (user_id,))
-
-    await bot.process_commands(message)
-
-@bot.command()
-async def rank(ctx):
-    stats = get_db("SELECT xp FROM users WHERE user_id = ?", (ctx.author.id,))
-    if stats:
-        await ctx.send(f"You have {stats[0]} XP!")
-    else:
-        await ctx.send("You aren't in the database yet. Talk a bit first!")
-        
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
