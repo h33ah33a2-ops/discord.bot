@@ -9,6 +9,7 @@ import math
 import datetime
 import re
 import asyncio
+import sqlite3
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,12 +22,66 @@ intents.members = True
 intents.voice_states = True
 intents.presences = True  # REQUIRED FOR THE COOL STATUS AFK FEATURE
 
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+bot = commands.Bot(command_prefix='$', intents=intents, help_command=None)
+
+# --- SQLITE DATABASE SETUP ---
+DB_FILE = "bot_data.db"
+
+def get_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db()
+    c = conn.cursor()
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS xp_data (
+            guild_id INTEGER,
+            user_id INTEGER,
+            message_xp INTEGER DEFAULT 0,
+            voice_xp INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS economy (
+            guild_id INTEGER,
+            user_id INTEGER,
+            wallet INTEGER DEFAULT 0,
+            bank INTEGER DEFAULT 0,
+            last_daily REAL DEFAULT 0,
+            last_weekly REAL DEFAULT 0,
+            last_work REAL DEFAULT 0,
+            last_beg REAL DEFAULT 0,
+            inventory TEXT DEFAULT '[]',
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS warnings (
+            guild_id INTEGER,
+            user_id INTEGER,
+            count INTEGER DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS afk_users (
+            guild_id INTEGER,
+            user_id INTEGER,
+            reason TEXT,
+            since REAL,
+            old_nick TEXT,
+            image_url TEXT,
+            PRIMARY KEY (guild_id, user_id)
+        );
+        CREATE TABLE IF NOT EXISTS level_channels (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
 
 secret_role = "Gamer"
 
-XP_FILE = "xp_data.json"
-WARNINGS_FILE = "warnings.json"
 MESSAGE_XP_MIN = 15
 MESSAGE_XP_MAX = 25
 MESSAGE_XP_COOLDOWN = 60
@@ -34,6 +89,10 @@ VOICE_XP_PER_MINUTE = 10
 
 xp_data = {}
 warnings_data = {}
+economy = {}
+afk_users = {}
+afk_cooldowns = {}
+level_channels = {}
 message_cooldowns = {}
 voice_sessions = {}
 
@@ -47,104 +106,135 @@ EIGHT_BALL_RESPONSES = [
     "My sources say no.", "Outlook not so good.", "Very doubtful.",
 ]
 
-# --- DATA LOADING FUNCTIONS ---
+# --- SQLITE LOAD/SAVE FUNCTIONS ---
 
 def load_xp():
     global xp_data
-    if os.path.exists(XP_FILE):
-        try:
-            with open(XP_FILE, "r", encoding="utf-8") as f:
-                xp_data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            xp_data = {}
-    else:
-        xp_data = {}
+    xp_data = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, message_xp, voice_xp FROM xp_data"):
+        g = str(row["guild_id"])
+        u = str(row["user_id"])
+        xp_data.setdefault(g, {})[u] = {"message_xp": row["message_xp"], "voice_xp": row["voice_xp"]}
+    conn.close()
 
 def save_xp():
-    try:
-        with open(XP_FILE, "w", encoding="utf-8") as f:
-            json.dump(xp_data, f)
-    except OSError:
-        pass
+    conn = get_db()
+    for gid, users in xp_data.items():
+        for uid, entry in users.items():
+            conn.execute(
+                "INSERT INTO xp_data (guild_id, user_id, message_xp, voice_xp) VALUES (?,?,?,?) "
+                "ON CONFLICT(guild_id, user_id) DO UPDATE SET message_xp=excluded.message_xp, voice_xp=excluded.voice_xp",
+                (int(gid), int(uid), entry.get("message_xp", 0), entry.get("voice_xp", 0))
+            )
+    conn.commit()
+    conn.close()
+
+def save_xp_entry(guild_id, user_id):
+    entry = xp_data.get(str(guild_id), {}).get(str(user_id), {"message_xp": 0, "voice_xp": 0})
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO xp_data (guild_id, user_id, message_xp, voice_xp) VALUES (?,?,?,?) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET message_xp=excluded.message_xp, voice_xp=excluded.voice_xp",
+        (int(guild_id), int(user_id), entry.get("message_xp", 0), entry.get("voice_xp", 0))
+    )
+    conn.commit()
+    conn.close()
 
 def load_warnings():
     global warnings_data
-    if os.path.exists(WARNINGS_FILE):
-        try:
-            with open(WARNINGS_FILE, "r", encoding="utf-8") as f:
-                warnings_data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            warnings_data = {}
-    else:
-        warnings_data = {}
+    warnings_data = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, count FROM warnings"):
+        g = str(row["guild_id"])
+        u = str(row["user_id"])
+        warnings_data.setdefault(g, {})[u] = row["count"]
+    conn.close()
 
 def save_warnings():
-    try:
-        with open(WARNINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(warnings_data, f)
-    except OSError:
-        pass
-
-ECON_FILE = "economy.json"
-economy = {}
+    conn = get_db()
+    for gid, users in warnings_data.items():
+        for uid, count in users.items():
+            conn.execute(
+                "INSERT INTO warnings (guild_id, user_id, count) VALUES (?,?,?) "
+                "ON CONFLICT(guild_id, user_id) DO UPDATE SET count=excluded.count",
+                (int(gid), int(uid), count)
+            )
+    conn.commit()
+    conn.close()
 
 def load_econ():
     global economy
-    if os.path.exists(ECON_FILE):
-        try:
-            with open(ECON_FILE, "r", encoding="utf-8") as f:
-                economy = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            economy = {}
-    else:
-        economy = {}
+    economy = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, wallet, bank, last_daily, last_weekly, last_work, last_beg, inventory FROM economy"):
+        g = str(row["guild_id"])
+        u = str(row["user_id"])
+        economy.setdefault(g, {})[u] = {
+            "wallet": row["wallet"], "bank": row["bank"],
+            "last_daily": row["last_daily"], "last_weekly": row["last_weekly"],
+            "last_work": row["last_work"], "last_beg": row["last_beg"],
+            "inventory": json.loads(row["inventory"] or "[]"),
+        }
+    conn.close()
 
 def save_econ():
-    try:
-        with open(ECON_FILE, "w", encoding="utf-8") as f:
-            json.dump(economy, f)
-    except OSError:
-        pass
-
-LEVEL_CHANNELS_FILE = "level_channels.json"
-level_channels = {}
-AFK_FILE = "afk.json"
-afk_users = {}
-afk_cooldowns = {}
+    conn = get_db()
+    for gid, users in economy.items():
+        for uid, e in users.items():
+            conn.execute(
+                "INSERT INTO economy (guild_id, user_id, wallet, bank, last_daily, last_weekly, last_work, last_beg, inventory) "
+                "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+                "wallet=excluded.wallet, bank=excluded.bank, last_daily=excluded.last_daily, "
+                "last_weekly=excluded.last_weekly, last_work=excluded.last_work, last_beg=excluded.last_beg, "
+                "inventory=excluded.inventory",
+                (int(gid), int(uid), e["wallet"], e["bank"], e["last_daily"], e["last_weekly"],
+                 e["last_work"], e["last_beg"], json.dumps(e["inventory"]))
+            )
+    conn.commit()
+    conn.close()
 
 def load_level_channels():
     global level_channels
-    if os.path.exists(LEVEL_CHANNELS_FILE):
-        try:
-            with open(LEVEL_CHANNELS_FILE, "r") as f:
-                level_channels = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            level_channels = {}
+    level_channels = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, channel_id FROM level_channels"):
+        level_channels[str(row["guild_id"])] = row["channel_id"]
+    conn.close()
 
 def save_level_channels():
-    try:
-        with open(LEVEL_CHANNELS_FILE, "w") as f:
-            json.dump(level_channels, f)
-    except OSError:
-        pass
+    conn = get_db()
+    for gid, cid in level_channels.items():
+        conn.execute(
+            "INSERT INTO level_channels (guild_id, channel_id) VALUES (?,?) "
+            "ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (int(gid), int(cid))
+        )
+    conn.commit()
+    conn.close()
 
 def load_afk():
     global afk_users
-    if os.path.exists(AFK_FILE):
-        try:
-            with open(AFK_FILE, "r") as f:
-                raw = json.load(f)
-            afk_users = {tuple(int(x) for x in k.split(":")): v for k, v in raw.items()}
-        except (json.JSONDecodeError, OSError, ValueError):
-            afk_users = {}
+    afk_users = {}
+    conn = get_db()
+    for row in conn.execute("SELECT guild_id, user_id, reason, since, old_nick, image_url FROM afk_users"):
+        key = (row["guild_id"], row["user_id"])
+        afk_users[key] = {
+            "reason": row["reason"], "since": row["since"],
+            "old_nick": row["old_nick"], "image_url": row["image_url"]
+        }
+    conn.close()
 
 def save_afk():
-    try:
-        serial = {f"{g}:{u}": v for (g, u), v in afk_users.items()}
-        with open(AFK_FILE, "w") as f:
-            json.dump(serial, f)
-    except OSError:
-        pass
+    conn = get_db()
+    conn.execute("DELETE FROM afk_users")
+    for (gid, uid), data in afk_users.items():
+        conn.execute(
+            "INSERT INTO afk_users (guild_id, user_id, reason, since, old_nick, image_url) VALUES (?,?,?,?,?,?)",
+            (int(gid), int(uid), data.get("reason"), data.get("since"), data.get("old_nick"), data.get("image_url"))
+        )
+    conn.commit()
+    conn.close()
 
 def get_econ(gid, uid):
     g = economy.setdefault(str(gid), {})
@@ -180,6 +270,7 @@ def get_user_entry(guild_id, user_id):
 def add_xp(guild_id, user_id, amount, kind):
     entry = get_user_entry(guild_id, user_id)
     entry[kind] = entry.get(kind, 0) + amount
+    save_xp_entry(guild_id, user_id)
 
 def total_xp(entry):
     return entry.get("message_xp", 0) + entry.get("voice_xp", 0)
@@ -305,11 +396,16 @@ async def on_message(message):
             try:
                 away = humanize_seconds(time.time() - data.get("since", time.time()))
                 embed = discord.Embed(
-                    description=f"👋 Welcome back {message.author.mention}! You were away for **{away}**.",
-                    color=discord.Color.green()
+                    title="👋  Welcome Back!",
+                    color=discord.Color.from_rgb(87, 242, 135),
                 )
+                embed.set_author(name=message.author.display_name, icon_url=message.author.display_avatar.url)
+                embed.add_field(name="⏱️ You were away for", value=f"**{away}**", inline=True)
+                if data.get("reason") and data["reason"] != "AFK":
+                    embed.add_field(name="📝 Your reason was", value=f"*{data['reason']}*", inline=True)
                 if data.get("image_url"):
                     embed.set_thumbnail(url=data["image_url"])
+                embed.set_footer(text="Glad to have you back!")
                 await message.channel.send(embed=embed)
             except discord.Forbidden:
                 pass
@@ -325,13 +421,17 @@ async def on_message(message):
                     info = afk_users[k]
                     away = humanize_seconds(time.time() - info.get("since", time.time()))
                     
-                    embed = discord.Embed(
-                        description=f"💤 **{u.display_name}** is currently AFK: *{info['reason']}*\n⏳ Away for {away}",
-                        color=discord.Color.light_grey()
+                    ping_embed = discord.Embed(
+                        title="💤  This person is AFK",
+                        color=discord.Color.from_rgb(88, 101, 242),
                     )
+                    ping_embed.set_author(name=u.display_name, icon_url=u.display_avatar.url)
+                    ping_embed.add_field(name="📝 Reason", value=f"*{info['reason']}*", inline=False)
+                    ping_embed.add_field(name="⏱️ Away for", value=f"**{away}**", inline=True)
+                    ping_embed.add_field(name="🕐 Since", value=f"<t:{int(info.get('since', time.time()))}:R>", inline=True)
                     if info.get("image_url"):
-                        embed.set_thumbnail(url=info["image_url"])
-                    mentioned_msgs.append(embed)
+                        ping_embed.set_thumbnail(url=info["image_url"])
+                    mentioned_msgs.append(ping_embed)
             
             for embed in mentioned_msgs:
                 try:
@@ -2759,24 +2859,27 @@ async def afk(ctx, *, reason: str = "AFK"):
     if ctx.guild is None:
         await ctx.send("AFK only works in a server.")
         return
-    
-    # Cooldown to prevent spam
+
     key = (ctx.guild.id, ctx.author.id)
     now = time.time()
     if key in afk_cooldowns and (now - afk_cooldowns[key]) < 60:
-        await ctx.send("⏰ Wait a minute before changing your AFK status again.")
+        remaining = int(60 - (now - afk_cooldowns[key]))
+        embed = discord.Embed(
+            title="⏰ Slow down!",
+            description=f"You can change your AFK status again in **{remaining}s**.",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
         return
 
     old_nick = ctx.author.nick
-    
-    # 1. Change Nickname
-    new = f"[AFK] {ctx.author.display_name}"[:32]
+
+    new_nick = f"💤 {ctx.author.display_name}"[:32]
     try:
-        await ctx.author.edit(nick=new)
+        await ctx.author.edit(nick=new_nick)
     except (discord.Forbidden, discord.HTTPException):
         pass
 
-    # 2. Capture Image if attached (The Cooler part)
     image_url = None
     if ctx.message.attachments:
         for att in ctx.message.attachments:
@@ -2784,38 +2887,43 @@ async def afk(ctx, *, reason: str = "AFK"):
                 image_url = att.url
                 break
 
-    # 3. Set Discord Custom Status (The Coolest part)
     try:
-        status_text = f"!afk {reason}"[:128]
+        status_text = f"$afk {reason}"[:128]
         new_activities = [discord.CustomActivity(name=status_text)]
-        
-        # Preserve other activities like Spotify or Playing...
         for a in ctx.author.activities:
             if not isinstance(a, discord.CustomActivity):
                 new_activities.append(a)
-                
         await ctx.author.edit(activities=new_activities)
     except Exception:
         pass
 
-    # 4. Save data
+    afk_since = time.time()
     afk_users[key] = {
-        "reason": reason, 
-        "since": time.time(), 
+        "reason": reason,
+        "since": afk_since,
         "old_nick": old_nick,
         "image_url": image_url
     }
     afk_cooldowns[key] = now
     save_afk()
 
-    # 5. Send cool embed
+    afk_moods = ["🌙", "😴", "💤", "🛌", "🎧", "🌌", "☕", "🔇"]
+    mood = random.choice(afk_moods)
+
     embed = discord.Embed(
-        description=f"💤 {ctx.author.mention} is now **AFK**\n📝 *{reason}*",
-        color=discord.Color.dark_grey(),
+        title=f"{mood}  Gone AFK",
+        color=discord.Color.from_rgb(88, 101, 242),
+        timestamp=datetime.datetime.utcfromtimestamp(afk_since)
     )
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+    embed.add_field(name="📝 Reason", value=f"*{reason}*", inline=False)
+    embed.add_field(name="🕐 AFK Since", value=f"<t:{int(afk_since)}:R>", inline=True)
+    embed.add_field(name="🔔 Pings?", value="I'll notify others who ping you", inline=True)
     if image_url:
         embed.set_image(url=image_url)
-    embed.set_footer(text="I'll set your status and let people know when they ping you. Send any message to come back.")
+    else:
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.set_footer(text="Send any message to come back • Your nickname & status are updated")
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -2882,264 +2990,264 @@ async def coinstreak(ctx):
 
 HELP_CATEGORIES = [
     ("📊 Leveling & XP", [
-        ("!rank [@member]", "Show level, XP, progress bar, and server rank."),
-        ("!top / !leaderboard / !lb", "Top 10 by total XP."),
-        ("!top message", "Top 10 by message XP."),
-        ("!top voice", "Top 10 by voice XP."),
-        ("!toplevel / !levels", "Top 10 level climbers with progress bars."),
-        ("!setlevelchannel [#channel]", "Send level-up announcements to a channel. (Manage Server)"),
-        ("!removelevelchannel", "Disable a fixed level-up channel. (Manage Server)"),
+        ("$rank [@member]", "Show level, XP, progress bar, and server rank."),
+        ("$top / $leaderboard / $lb", "Top 10 by total XP."),
+        ("$top message", "Top 10 by message XP."),
+        ("$top voice", "Top 10 by voice XP."),
+        ("$toplevel / $levels", "Top 10 level climbers with progress bars."),
+        ("$setlevelchannel [#channel]", "Send level-up announcements to a channel. (Manage Server)"),
+        ("$removelevelchannel", "Disable a fixed level-up channel. (Manage Server)"),
     ]),
     ("🛡️ Moderation", [
-        ("!kick @member [reason]", "Kick a member. (Kick Members)"),
-        ("!ban @member [reason]", "Ban a member. (Ban Members)"),
-        ("!unban <user_id> [reason]", "Unban by user ID. (Ban Members)"),
-        ("!mute / !timeout @member [min] [reason]", "Timeout a member. (Moderate Members)"),
-        ("!unmute @member", "Remove a timeout. (Moderate Members)"),
-        ("!warn @member [reason]", "Warn a member. (Kick Members)"),
-        ("!warnings [@member]", "Show a member's warnings."),
-        ("!clearwarns @member", "Clear warnings. (Kick Members)"),
-        ("!clear <1-100>", "Bulk delete messages. (Manage Messages)"),
+        ("$kick @member [reason]", "Kick a member. (Kick Members)"),
+        ("$ban @member [reason]", "Ban a member. (Ban Members)"),
+        ("$unban <user_id> [reason]", "Unban by user ID. (Ban Members)"),
+        ("$mute / $timeout @member [min] [reason]", "Timeout a member. (Moderate Members)"),
+        ("$unmute @member", "Remove a timeout. (Moderate Members)"),
+        ("$warn @member [reason]", "Warn a member. (Kick Members)"),
+        ("$warnings [@member]", "Show a member's warnings."),
+        ("$clearwarns @member", "Clear warnings. (Kick Members)"),
+        ("$clear <1-100>", "Bulk delete messages. (Manage Messages)"),
     ]),
     ("⚙️ Server & Channel Management", [
-        ("!nickname @member [nick]", "Change/reset nickname. (Manage Nicknames)"),
-        ("!createchannel <text|voice> <name>", "Create a channel. (Manage Channels)"),
-        ("!deletechannel [#channel]", "Delete a channel. (Manage Channels)"),
-        ("!addrole @member <role>", "Give a role. (Manage Roles)"),
-        ("!removerole @member <role>", "Remove a role. (Manage Roles)"),
-        ("!giveaway <duration> <prize>", "Start a giveaway. (Manage Server)"),
-        ("!lock", "Lock the channel for @everyone. (Manage Channels)"),
-        ("!unlock", "Unlock the channel. (Manage Channels)"),
-        ("!slowmode <seconds>", "Set channel slowmode. (Manage Channels)"),
-        ("!renamechannel <name>", "Rename this channel. (Manage Channels)"),
-        ("!settopic <text>", "Set channel topic. (Manage Channels)"),
-        ("!hidechannel", "Hide channel from @everyone. (Manage Channels)"),
-        ("!showchannel", "Reveal channel to @everyone. (Manage Channels)"),
-        ("!nuke", "Clone+delete channel to clear it. (Manage Channels)"),
+        ("$nickname @member [nick]", "Change/reset nickname. (Manage Nicknames)"),
+        ("$createchannel <text|voice> <name>", "Create a channel. (Manage Channels)"),
+        ("$deletechannel [#channel]", "Delete a channel. (Manage Channels)"),
+        ("$addrole @member <role>", "Give a role. (Manage Roles)"),
+        ("$removerole @member <role>", "Remove a role. (Manage Roles)"),
+        ("$giveaway <duration> <prize>", "Start a giveaway. (Manage Server)"),
+        ("$lock", "Lock the channel for @everyone. (Manage Channels)"),
+        ("$unlock", "Unlock the channel. (Manage Channels)"),
+        ("$slowmode <seconds>", "Set channel slowmode. (Manage Channels)"),
+        ("$renamechannel <name>", "Rename this channel. (Manage Channels)"),
+        ("$settopic <text>", "Set channel topic. (Manage Channels)"),
+        ("$hidechannel", "Hide channel from @everyone. (Manage Channels)"),
+        ("$showchannel", "Reveal channel to @everyone. (Manage Channels)"),
+        ("$nuke", "Clone+delete channel to clear it. (Manage Channels)"),
     ]),
     ("🔇 Voice Management", [
-        ("!vcmute @member", "Server-mute in voice. (Mute Members)"),
-        ("!vcunmute @member", "Server-unmute in voice. (Mute Members)"),
-        ("!vcdeafen @member", "Server-deafen in voice. (Deafen Members)"),
-        ("!vcundeafen @member", "Server-undeafen in voice. (Deafen Members)"),
-        ("!vcdisconnect @member", "Disconnect from voice. (Move Members)"),
+        ("$vcmute @member", "Server-mute in voice. (Mute Members)"),
+        ("$vcunmute @member", "Server-unmute in voice. (Mute Members)"),
+        ("$vcdeafen @member", "Server-deafen in voice. (Deafen Members)"),
+        ("$vcundeafen @member", "Server-undeafen in voice. (Deafen Members)"),
+        ("$vcdisconnect @member", "Disconnect from voice. (Move Members)"),
     ]),
     ("ℹ️ Info & Utility", [
-        ("!ping", "Show bot latency."),
-        ("!botinfo", "Show bot stats."),
-        ("!serverinfo", "Show server info."),
-        ("!userinfo [@member]", "Show user info."),
-        ("!channelinfo [#channel]", "Show channel info."),
-        ("!avatar [@member]", "Show a user's avatar."),
-        ("!roles", "List all server roles."),
-        ("!say <message>", "Bot repeats your message. (Manage Messages)"),
-        ("!dm <message>", "Bot DMs you what you said."),
-        ("!reply", "Bot replies to your message."),
-        ("!hello", "Friendly greeting."),
-        ("!about", "About this bot."),
-        ("!invite", "Create a 1-hour, 1-use invite."),
-        ("!serverid", "Show this server's ID."),
-        ("!channelid", "Show this channel's ID."),
-        ("!messageid", "Show your message's ID."),
-        ("!firstmessage", "Jump-link to the first message in this channel."),
-        ("!snipe", "Show the last deleted message in this channel."),
-        ("!editsnipe", "Show the last edited message in this channel."),
-        ("!embed <title> | <desc>", "Send a fancy embed message."),
-        ("!vote <question>", "Create a 👍/👎/🤷 vote."),
-        ("!suggest <text>", "Post a suggestion embed for voting."),
-        ("!afk [reason]", "Mark yourself as AFK. Supports image attachments!"),
-        ("!github <user>", "Link to a GitHub profile."),
-        ("!youtube <query>", "YouTube search link."),
-        ("!google <query>", "Google search link."),
-        ("!lmgtfy <query>", "LMGTFY search link."),
+        ("$ping", "Show bot latency."),
+        ("$botinfo", "Show bot stats."),
+        ("$serverinfo", "Show server info."),
+        ("$userinfo [@member]", "Show user info."),
+        ("$channelinfo [#channel]", "Show channel info."),
+        ("$avatar [@member]", "Show a user's avatar."),
+        ("$roles", "List all server roles."),
+        ("$say <message>", "Bot repeats your message. (Manage Messages)"),
+        ("$dm <message>", "Bot DMs you what you said."),
+        ("$reply", "Bot replies to your message."),
+        ("$hello", "Friendly greeting."),
+        ("$about", "About this bot."),
+        ("$invite", "Create a 1-hour, 1-use invite."),
+        ("$serverid", "Show this server's ID."),
+        ("$channelid", "Show this channel's ID."),
+        ("$messageid", "Show your message's ID."),
+        ("$firstmessage", "Jump-link to the first message in this channel."),
+        ("$snipe", "Show the last deleted message in this channel."),
+        ("$editsnipe", "Show the last edited message in this channel."),
+        ("$embed <title> | <desc>", "Send a fancy embed message."),
+        ("$vote <question>", "Create a 👍/👎/🤷 vote."),
+        ("$suggest <text>", "Post a suggestion embed for voting."),
+        ("$afk [reason]", "Mark yourself as AFK. Supports image attachments!"),
+        ("$github <user>", "Link to a GitHub profile."),
+        ("$youtube <query>", "YouTube search link."),
+        ("$google <query>", "Google search link."),
+        ("$lmgtfy <query>", "LMGTFY search link."),
     ]),
     ("📈 Server Stats", [
-        ("!membercount", "Total members."),
-        ("!humancount", "Number of human members."),
-        ("!botcount", "Number of bot members."),
-        ("!channelcount", "Total channels."),
-        ("!textchannels", "Number of text channels."),
-        ("!voicechannels", "Number of voice channels."),
-        ("!rolecount", "Number of roles."),
-        ("!emojicount", "Number of custom emojis."),
-        ("!emojis", "Show up to 30 server emojis."),
-        ("!boostcount", "Boost level + boost count."),
-        ("!owner", "Show the server owner."),
-        ("!oldestmember", "Earliest non-bot member who joined."),
-        ("!newestmember", "Most recent non-bot member who joined."),
-        ("!servericon", "Show server icon."),
-        ("!serverbanner", "Show server banner."),
+        ("$membercount", "Total members."),
+        ("$humancount", "Number of human members."),
+        ("$botcount", "Number of bot members."),
+        ("$channelcount", "Total channels."),
+        ("$textchannels", "Number of text channels."),
+        ("$voicechannels", "Number of voice channels."),
+        ("$rolecount", "Number of roles."),
+        ("$emojicount", "Number of custom emojis."),
+        ("$emojis", "Show up to 30 server emojis."),
+        ("$boostcount", "Boost level + boost count."),
+        ("$owner", "Show the server owner."),
+        ("$oldestmember", "Earliest non-bot member who joined."),
+        ("$newestmember", "Most recent non-bot member who joined."),
+        ("$servericon", "Show server icon."),
+        ("$serverbanner", "Show server banner."),
     ]),
     ("👤 User Stats", [
-        ("!userbanner [@member]", "Show a user's profile banner."),
-        ("!joinposition [@member]", "Show join order position."),
-        ("!accountage [@member]", "How old the account is in days."),
-        ("!myid", "Show your user ID."),
-        ("!mention @member", "Show the raw mention syntax."),
-        ("!myroles", "List your roles."),
-        ("!perms [@member]", "List a member's permissions."),
-        ("!isbot @member", "Check if a member is a bot."),
+        ("$userbanner [@member]", "Show a user's profile banner."),
+        ("$joinposition [@member]", "Show join order position."),
+        ("$accountage [@member]", "How old the account is in days."),
+        ("$myid", "Show your user ID."),
+        ("$mention @member", "Show the raw mention syntax."),
+        ("$myroles", "List your roles."),
+        ("$perms [@member]", "List a member's permissions."),
+        ("$isbot @member", "Check if a member is a bot."),
     ]),
     ("👥 Roles", [
-        ("!assign", f"Give yourself the {secret_role} role."),
-        ("!remove", f"Remove the {secret_role} role."),
-        ("!secret", f"{secret_role}-only command."),
+        ("$assign", f"Give yourself the {secret_role} role."),
+        ("$remove", f"Remove the {secret_role} role."),
+        ("$secret", f"{secret_role}-only command."),
     ]),
     ("💰 Economy", [
-        ("!balance [@member]", "Show wallet + bank balance."),
-        ("!daily", "Claim daily coins (24h cooldown)."),
-        ("!weekly", "Claim weekly coins (7d cooldown)."),
-        ("!work", "Work a job for coins (1h cooldown)."),
-        ("!beg", "Beg for coins (1m cooldown)."),
-        ("!gamble <amount>", "Gamble coins (~45% win)."),
-        ("!give @member <amount>", "Give a member coins from your wallet."),
-        ("!deposit <amount|all>", "Move coins from wallet to bank."),
-        ("!withdraw <amount|all>", "Move coins from bank to wallet."),
-        ("!rob @member", "Try to rob a member."),
-        ("!richest", "Top 10 richest members."),
-        ("!shop", "Show the shop."),
-        ("!buy <item>", "Buy an item from the shop."),
-        ("!sell <item>", "Sell an item from your inventory."),
-        ("!inventory [@member]", "Show inventory."),
+        ("$balance [@member]", "Show wallet + bank balance."),
+        ("$daily", "Claim daily coins (24h cooldown)."),
+        ("$weekly", "Claim weekly coins (7d cooldown)."),
+        ("$work", "Work a job for coins (1h cooldown)."),
+        ("$beg", "Beg for coins (1m cooldown)."),
+        ("$gamble <amount>", "Gamble coins (~45% win)."),
+        ("$give @member <amount>", "Give a member coins from your wallet."),
+        ("$deposit <amount|all>", "Move coins from wallet to bank."),
+        ("$withdraw <amount|all>", "Move coins from bank to wallet."),
+        ("$rob @member", "Try to rob a member."),
+        ("$richest", "Top 10 richest members."),
+        ("$shop", "Show the shop."),
+        ("$buy <item>", "Buy an item from the shop."),
+        ("$sell <item>", "Sell an item from your inventory."),
+        ("$inventory [@member]", "Show inventory."),
     ]),
     ("🎮 Games & Fun", [
-        ("!8ball <question>", "Ask the magic 8-ball."),
-        ("!coinflip", "Flip a coin."),
-        ("!coinstreak", "How long can heads streak go?"),
-        ("!dice [sides]", "Roll a die (default 6)."),
-        ("!d4 / !d8 / !d10 / !d12 / !d20 / !d100", "Roll a specific-sided die."),
-        ("!card", "Draw a random playing card."),
-        ("!poll <question>", "Create a 👍/👎 poll."),
-        ("!rps <rock|paper|scissors>", "Rock paper scissors vs the bot."),
-        ("!rpsls <choice>", "Rock paper scissors lizard spock."),
-        ("!guess", "Start a 1-100 number guessing game."),
-        ("!highlow", "Single-shot higher/lower guess."),
-        ("!hangman", "Start a hangman game."),
-        ("!scramble", "Unscramble a word in 30s."),
-        ("!trivia", "Random trivia question."),
-        ("!mathquiz", "Random math problem."),
-        ("!riddle", "Get a riddle (with hidden answer)."),
-        ("!slot", "Spin the slot machine."),
-        ("!lottery", "1-in-100 lottery roll."),
-        ("!russianroulette", "Spin the chamber. Maybe pull the trigger."),
-        ("!truth", "Random truth question."),
-        ("!dare", "Random dare."),
-        ("!neverhaveiever", "Random NHIE prompt."),
-        ("!wyr", "Would you rather."),
-        ("!thisorthat", "This or that."),
-        ("!stopgame", "End the current game in this channel."),
+        ("$8ball <question>", "Ask the magic 8-ball."),
+        ("$coinflip", "Flip a coin."),
+        ("$coinstreak", "How long can heads streak go?"),
+        ("$dice [sides]", "Roll a die (default 6)."),
+        ("$d4 / $d8 / $d10 / $d12 / $d20 / $d100", "Roll a specific-sided die."),
+        ("$card", "Draw a random playing card."),
+        ("$poll <question>", "Create a 👍/👎 poll."),
+        ("$rps <rock|paper|scissors>", "Rock paper scissors vs the bot."),
+        ("$rpsls <choice>", "Rock paper scissors lizard spock."),
+        ("$guess", "Start a 1-100 number guessing game."),
+        ("$highlow", "Single-shot higher/lower guess."),
+        ("$hangman", "Start a hangman game."),
+        ("$scramble", "Unscramble a word in 30s."),
+        ("$trivia", "Random trivia question."),
+        ("$mathquiz", "Random math problem."),
+        ("$riddle", "Get a riddle (with hidden answer)."),
+        ("$slot", "Spin the slot machine."),
+        ("$lottery", "1-in-100 lottery roll."),
+        ("$russianroulette", "Spin the chamber. Maybe pull the trigger."),
+        ("$truth", "Random truth question."),
+        ("$dare", "Random dare."),
+        ("$neverhaveiever", "Random NHIE prompt."),
+        ("$wyr", "Would you rather."),
+        ("$thisorthat", "This or that."),
+        ("$stopgame", "End the current game in this channel."),
     ]),
     ("🎵 Music", [
-        ("!play <url or search>", "Play / queue a song from YouTube."),
-        ("!skip", "Skip the current song."),
-        ("!pause / !resume", "Pause or resume playback."),
-        ("!stop", "Stop the music and disconnect."),
-        ("!queue / !q", "Show the queue."),
-        ("!join / !leave", "Make the bot join or leave voice."),
+        ("$play <url or search>", "Play / queue a song from YouTube."),
+        ("$skip", "Skip the current song."),
+        ("$pause / $resume", "Pause or resume playback."),
+        ("$stop", "Stop the music and disconnect."),
+        ("$queue / $q", "Show the queue."),
+        ("$join / $leave", "Make the bot join or leave voice."),
     ]),
     ("🔤 Text & Formatting", [
-        ("!reverse <text>", "Reverse text."),
-        ("!upper <text>", "UPPERCASE text."),
-        ("!lower <text>", "lowercase text."),
-        ("!title <text>", "Title Case text."),
-        ("!capitalize <text>", "Capitalize the first letter."),
-        ("!len <text>", "Count chars and words."),
-        ("!rot13 <text>", "ROT13 cipher."),
-        ("!base64encode <text>", "Encode text to base64."),
-        ("!base64decode <text>", "Decode base64 to text."),
-        ("!morse <text>", "Encode text to morse."),
-        ("!unmorse <code>", "Decode morse to text."),
-        ("!leetspeak <text>", "Convert to 1337 5p34k."),
-        ("!mock <text>", "sPoNgEbOb mOcK case."),
-        ("!uwu <text>", "uwu-ify text."),
-        ("!owoify <text>", "OwO-ify text."),
-        ("!clap <text>", "Add 👏 between 👏 words."),
-        ("!stretch <text>", "S t r e t c h text."),
-        ("!vapor <text>", "Ｆｕｌｌ-ｗｉｄｔｈ text."),
-        ("!bubble <text>", "Ⓑⓤⓑⓑⓛⓔ text."),
-        ("!emojify <text>", "Regional indicator emoji text."),
-        ("!md5 <text>", "MD5 hash of text."),
-        ("!sha1 <text>", "SHA-1 hash of text."),
-        ("!sha256 <text>", "SHA-256 hash of text."),
+        ("$reverse <text>", "Reverse text."),
+        ("$upper <text>", "UPPERCASE text."),
+        ("$lower <text>", "lowercase text."),
+        ("$title <text>", "Title Case text."),
+        ("$capitalize <text>", "Capitalize the first letter."),
+        ("$len <text>", "Count chars and words."),
+        ("$rot13 <text>", "ROT13 cipher."),
+        ("$base64encode <text>", "Encode text to base64."),
+        ("$base64decode <text>", "Decode base64 to text."),
+        ("$morse <text>", "Encode text to morse."),
+        ("$unmorse <code>", "Decode morse to text."),
+        ("$leetspeak <text>", "Convert to 1337 5p34k."),
+        ("$mock <text>", "sPoNgEbOb mOcK case."),
+        ("$uwu <text>", "uwu-ify text."),
+        ("$owoify <text>", "OwO-ify text."),
+        ("$clap <text>", "Add 👏 between 👏 words."),
+        ("$stretch <text>", "S t r e t c h text."),
+        ("$vapor <text>", "Ｆｕｌｌ-ｗｉｄｔｈ text."),
+        ("$bubble <text>", "Ⓑⓤⓑⓑⓛⓔ text."),
+        ("$emojify <text>", "Regional indicator emoji text."),
+        ("$md5 <text>", "MD5 hash of text."),
+        ("$sha1 <text>", "SHA-1 hash of text."),
+        ("$sha256 <text>", "SHA-256 hash of text."),
     ]),
     ("🧮 Math", [
-        ("!calc <expr>", "Evaluate a basic math expression."),
-        ("!add <a> <b>", "a + b."),
-        ("!sub <a> <b>", "a − b."),
-        ("!mul <a> <b>", "a × b."),
-        ("!div <a> <b>", "a ÷ b."),
-        ("!mod <a> <b>", "a mod b."),
-        ("!pow <a> <b>", "a raised to the b."),
-        ("!sqrt <n>", "Square root of n."),
-        ("!abs <n>", "Absolute value of n."),
-        ("!factorial <n>", "n! (0-100)."),
-        ("!fib <n>", "n-th Fibonacci number (0-1000)."),
-        ("!isprime <n>", "Check if n is prime."),
-        ("!gcd <a> <b>", "Greatest common divisor."),
-        ("!lcm <a> <b>", "Least common multiple."),
-        ("!percent <value> <total>", "value as % of total."),
+        ("$calc <expr>", "Evaluate a basic math expression."),
+        ("$add <a> <b>", "a + b."),
+        ("$sub <a> <b>", "a − b."),
+        ("$mul <a> <b>", "a × b."),
+        ("$div <a> <b>", "a ÷ b."),
+        ("$mod <a> <b>", "a mod b."),
+        ("$pow <a> <b>", "a raised to the b."),
+        ("$sqrt <n>", "Square root of n."),
+        ("$abs <n>", "Absolute value of n."),
+        ("$factorial <n>", "n! (0-100)."),
+        ("$fib <n>", "n-th Fibonacci number (0-1000)."),
+        ("$isprime <n>", "Check if n is prime."),
+        ("$gcd <a> <b>", "Greatest common divisor."),
+        ("$lcm <a> <b>", "Least common multiple."),
+        ("$percent <value> <total>", "value as % of total."),
     ]),
     ("🔁 Conversions", [
-        ("!c2f <c> / !f2c <f>", "Celsius ↔ Fahrenheit."),
-        ("!km2mi <km> / !mi2km <mi>", "Kilometers ↔ miles."),
-        ("!kg2lb <kg> / !lb2kg <lb>", "Kilograms ↔ pounds."),
-        ("!m2ft <m> / !ft2m <ft>", "Meters ↔ feet."),
-        ("!bin2dec <bin> / !dec2bin <n>", "Binary ↔ decimal."),
-        ("!hex2dec <hex> / !dec2hex <n>", "Hex ↔ decimal."),
-        ("!oct2dec <oct> / !dec2oct <n>", "Octal ↔ decimal."),
+        ("$c2f <c> / $f2c <f>", "Celsius ↔ Fahrenheit."),
+        ("$km2mi <km> / $mi2km <mi>", "Kilometers ↔ miles."),
+        ("$kg2lb <kg> / $lb2kg <lb>", "Kilograms ↔ pounds."),
+        ("$m2ft <m> / $ft2m <ft>", "Meters ↔ feet."),
+        ("$bin2dec <bin> / $dec2bin <n>", "Binary ↔ decimal."),
+        ("$hex2dec <hex> / $dec2hex <n>", "Hex ↔ decimal."),
+        ("$oct2dec <oct> / $dec2oct <n>", "Octal ↔ decimal."),
     ]),
     ("🎲 Random / Pick", [
-        ("!choose <a, b, c, ...>", "Pick one of the options."),
-        ("!shuffle <a, b, c, ...>", "Shuffle a comma list."),
-        ("!password [length]", "Generate a strong password (DM)."),
-        ("!color", "Random color preview."),
-        ("!rng [low] [high]", "Random integer in range."),
-        ("!rate <thing>", "Rate something X/10."),
-        ("!ship @a @b", "Ship two members with %."),
-        ("!decide <question>", "Yes / no / maybe."),
-        ("!wyr", "Would you rather prompt."),
-        ("!thisorthat", "This or that prompt."),
+        ("$choose <a, b, c, ...>", "Pick one of the options."),
+        ("$shuffle <a, b, c, ...>", "Shuffle a comma list."),
+        ("$password [length]", "Generate a strong password (DM)."),
+        ("$color", "Random color preview."),
+        ("$rng [low] [high]", "Random integer in range."),
+        ("$rate <thing>", "Rate something X/10."),
+        ("$ship @a @b", "Ship two members with %."),
+        ("$decide <question>", "Yes / no / maybe."),
+        ("$wyr", "Would you rather prompt."),
+        ("$thisorthat", "This or that prompt."),
     ]),
     ("🕒 Time & Date", [
-        ("!time", "Current UTC time."),
-        ("!date", "Current UTC date."),
-        ("!timestamp", "Current Unix timestamp."),
-        ("!age <year>", "Rough age from a birth year."),
-        ("!weekday", "What day of the week is it (UTC)."),
-        ("!uptime", "Bot uptime."),
-        ("!remindme <duration> <message>", "DM-less in-channel reminder."),
-        ("!countdown [n]", "Countdown 1-10 seconds."),
+        ("$time", "Current UTC time."),
+        ("$date", "Current UTC date."),
+        ("$timestamp", "Current Unix timestamp."),
+        ("$age <year>", "Rough age from a birth year."),
+        ("$weekday", "What day of the week is it (UTC)."),
+        ("$uptime", "Bot uptime."),
+        ("$remindme <duration> <message>", "DM-less in-channel reminder."),
+        ("$countdown [n]", "Countdown 1-10 seconds."),
     ]),
     ("📚 Quotes & Jokes", [
-        ("!joke", "Random joke."),
-        ("!dadjoke", "Random dad joke."),
-        ("!fact", "Random fun fact."),
-        ("!quote", "Random quote."),
-        ("!advice", "Random piece of advice."),
-        ("!fortune", "Random fortune-cookie message."),
-        ("!compliment [@member]", "Compliment someone."),
-        ("!roast [@member]", "Roast someone (mild)."),
-        ("!pickup [@member]", "Send a cheesy pickup line."),
-        ("!motivate", "Motivational message."),
+        ("$joke", "Random joke."),
+        ("$dadjoke", "Random dad joke."),
+        ("$fact", "Random fun fact."),
+        ("$quote", "Random quote."),
+        ("$advice", "Random piece of advice."),
+        ("$fortune", "Random fortune-cookie message."),
+        ("$compliment [@member]", "Compliment someone."),
+        ("$roast [@member]", "Roast someone (mild)."),
+        ("$pickup [@member]", "Send a cheesy pickup line."),
+        ("$motivate", "Motivational message."),
     ]),
 ]
 
 @bot.command(name="help")
 async def help_cmd(ctx, *, command_name: str = None):
     if command_name:
-        cmd = bot.get_command(command_name.lstrip("!").lower())
+        cmd = bot.get_command(command_name.lstrip("$").lower())
         if cmd is None:
-            await ctx.send(f"No command named `{command_name}` found. Use `!help` to see all commands.")
+            await ctx.send(f"No command named `{command_name}` found. Use `$help` to see all commands.")
             return
         for category, items in HELP_CATEGORIES:
             for usage, desc in items:
-                tokens = [t.lstrip("!").lower() for t in usage.split() if t.startswith("!")]
+                tokens = [t.lstrip("$").lower() for t in usage.split() if t.startswith("$")]
                 if cmd.name.lower() in tokens or any(a.lower() in tokens for a in cmd.aliases):
-                    embed = discord.Embed(title=f"!{cmd.name}", description=f"**Usage:** `{usage}`\n{desc}", color=discord.Color.blurple())
+                    embed = discord.Embed(title=f"${cmd.name}", description=f"**Usage:** `{usage}`\n{desc}", color=discord.Color.blurple())
                     embed.set_footer(text=f"Category: {category}")
                     await ctx.send(embed=embed)
                     return
-        embed = discord.Embed(title=f"!{cmd.name}", description="(no help entry)", color=discord.Color.blurple())
+        embed = discord.Embed(title=f"${cmd.name}", description="(no help entry)", color=discord.Color.blurple())
         await ctx.send(embed=embed)
         return
 
@@ -3148,7 +3256,7 @@ async def help_cmd(ctx, *, command_name: str = None):
     embed = discord.Embed(
         title=f"{bot.user.name} — Commands ({total_cmds} total)",
         description=(
-            "Prefix is `!`. Use `!help <command>` for details on any single command.\n"
+            "Prefix is `$`. Use `$help <command>` for details on any single command.\n"
             "**XP** is earned passively (15-25 per message, 10/min in voice). "
             "Levels follow `level² × 100` total XP."
         ),
@@ -3162,7 +3270,7 @@ async def help_cmd(ctx, *, command_name: str = None):
         names = []
         for usage, _ in items:
             for tok in usage.split():
-                if tok.startswith("!") and len(tok) > 1:
+                if tok.startswith("$") and len(tok) > 1:
                     names.append(f"`{tok}`")
         value = " ".join(names)
         if len(value) > 1024:
@@ -3173,7 +3281,7 @@ async def help_cmd(ctx, *, command_name: str = None):
             field_count = 0
         embed.add_field(name=f"{category} ({len(items)})", value=value, inline=False)
         field_count += 1
-    embed.set_footer(text=f"Use !help <command> for details • {total_cmds} commands")
+    embed.set_footer(text=f"Use $help <command> for details • {total_cmds} commands")
     pages.append(embed)
     for page in pages:
         await ctx.send(embed=page)
