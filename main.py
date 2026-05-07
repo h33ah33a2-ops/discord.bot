@@ -3416,7 +3416,4 @@ async def on_ready():
     print(f'Logged in as {bot.user.name} (ID: {bot.user.id})')
     print('------')
 
-
-# Run the bot
-bot.run(BOT_TOKEN)
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
