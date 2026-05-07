@@ -36,6 +36,31 @@ warnings_data = {}
 message_cooldowns = {}
 voice_sessions = {}
 
+# Game state dictionaries
+number_games = {}
+hangman_games = {}
+
+# Hangman stages for visual display
+HANGMAN_STAGES = [
+    "```\n  +---+\n  |   |\n      |\n      |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n      |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n  |   |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|   |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n      |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n /    |\n      |\n=========```",
+    "```\n  +---+\n  |   |\n  O   |\n /|\\  |\n / \\  |\n      |\n=========```",
+]
+
+
+def render_hangman(game):
+    """Render the current hangman game state."""
+    word_display = " ".join([c if c in game["guessed"] else "_" for c in game["word"]])
+    stage = HANGMAN_STAGES[len(game["wrong"])]
+    guessed_letters = ", ".join(sorted(game["guessed"])) if game["guessed"] else "None"
+    wrong_letters = ", ".join(sorted(game["wrong"])) if game["wrong"] else "None"
+    return f"{stage}\n\nWord: {word_display}\nGuessed: {guessed_letters}\nWrong: {wrong_letters} ({len(game['wrong'])}/6)"
+
+
 EIGHT_BALL_RESPONSES = [
     "It is certain.", "Without a doubt.", "Yes - definitely.",
     "You may rely on it.", "Most likely.", "Outlook good.",
