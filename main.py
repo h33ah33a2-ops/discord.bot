@@ -1329,31 +1329,59 @@ async def hangman(ctx):
 # --- MUSIC ---
 
 music_queues = {}
-YDL_OPTS = {
+
+# SoundCloud works reliably on server IPs; YouTube blocks server requests.
+# For direct URLs (YouTube, SC, etc.) we try extraction directly.
+# For search terms we default to SoundCloud search.
+YDL_OPTS_SC = {
     "format": "bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     "no_warnings": True,
-    "default_search": "ytsearch",
+    "default_search": "scsearch",
     "skip_download": True,
     "geo_bypass": True,
     "nocheckcertificate": True,
-    "ignoreerrors": False,
-    "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+    "ignoreerrors": True,
+    "source_address": "0.0.0.0",
+}
+# Separate opts for direct URL extraction (YouTube, etc.) — no default_search
+YDL_OPTS_URL = {
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "skip_download": True,
+    "geo_bypass": True,
+    "nocheckcertificate": True,
+    "ignoreerrors": True,
+    "source_address": "0.0.0.0",
 }
 FFMPEG_OPTS = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin",
-    "options": "-vn -loglevel warning",
+    "before_options": (
+        "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 "
+        "-nostdin -analyzeduration 0 -loglevel warning"
+    ),
+    "options": "-vn -bufsize 128k",
 }
+
+def _get_stream_url(info):
+    """Return the best audio stream URL from a yt-dlp info dict."""
+    if not info:
+        return None
+    url = info.get("url")
+    if url:
+        return url
+    for fmt in info.get("formats", []) or []:
+        if fmt.get("acodec", "none") != "none" and fmt.get("url"):
+            return fmt["url"]
+    return None
 
 def _play_next_callback(guild_id, error):
     if error:
-        print(f"Player error: {error}")
-    fut = asyncio.run_coroutine_threadsafe(_play_next(guild_id), bot.loop)
-    try:
-        fut.result()
-    except Exception as e:
-        print(f"play_next error: {e}")
+        print(f"[Music] Player error in guild {guild_id}: {error}")
+    # Schedule without blocking — fut.result() can deadlock the callback thread
+    asyncio.run_coroutine_threadsafe(_play_next(guild_id), bot.loop)
 
 async def _play_next(guild_id):
     guild = bot.get_guild(guild_id)
@@ -1361,25 +1389,76 @@ async def _play_next(guild_id):
         return
     queue = music_queues.get(guild_id, [])
     if not queue:
-        await guild.voice_client.disconnect()
+        try:
+            await guild.voice_client.disconnect()
+        except Exception:
+            pass
         return
     track = queue.pop(0)
-    source = discord.FFmpegPCMAudio(track["url"], **FFMPEG_OPTS)
-    guild.voice_client.play(source, after=lambda e: _play_next_callback(guild_id, e))
+    try:
+        source = discord.FFmpegPCMAudio(track["url"], **FFMPEG_OPTS)
+        source = discord.PCMVolumeTransformer(source, volume=0.8)
+        guild.voice_client.play(source, after=lambda e: _play_next_callback(guild_id, e))
+    except Exception as e:
+        print(f"[Music] FFmpeg error: {e}")
+        channel = guild.get_channel(track.get("channel_id"))
+        if channel:
+            try:
+                await channel.send(f"⚠️ Failed to play **{track['title']}**, skipping...")
+            except discord.Forbidden:
+                pass
+        _play_next_callback(guild_id, None)
+        return
     channel = guild.get_channel(track.get("channel_id"))
     if channel:
         try:
-            await channel.send(f"▶️ Now playing: **{track['title']}**")
+            source_tag = track.get("source", "")
+            tag = f" `[{source_tag}]`" if source_tag else ""
+            await channel.send(f"▶️ Now playing: **{track['title']}**{tag}")
         except discord.Forbidden:
             pass
 
+async def _fetch_track(query: str):
+    """
+    Extract track info from yt-dlp.
+    - Raw URLs → try direct extraction
+    - Search terms → SoundCloud search (reliable on server IPs)
+    Returns (info_dict, source_label) or (None, error_str).
+    """
+    import yt_dlp
+    loop = asyncio.get_event_loop()
+    is_url = query.startswith("http://") or query.startswith("https://")
+
+    if is_url:
+        # Try direct URL (YouTube, SoundCloud, etc.)
+        try:
+            with yt_dlp.YoutubeDL(YDL_OPTS_URL) as ydl:
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(query, download=False))
+            if info and "entries" in info:
+                info = next((e for e in info["entries"] if e), None)
+            if info and _get_stream_url(info):
+                return info, info.get("extractor_host", "direct")
+        except Exception:
+            pass
+        # URL failed (e.g. YouTube blocked) — fall through to SC search using title hint
+        return None, "YouTube and other direct URLs are blocked on this server. Try a SoundCloud link or a search term instead."
+
+    # Search term → SoundCloud
+    sc_query = f"scsearch1:{query}"
+    try:
+        with yt_dlp.YoutubeDL(YDL_OPTS_SC) as ydl:
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(sc_query, download=False))
+        if info and "entries" in info:
+            info = next((e for e in info["entries"] if e), None)
+        if info and _get_stream_url(info):
+            return info, "SoundCloud"
+    except Exception as e:
+        return None, f"Search failed: {e}"
+
+    return None, "No results found on SoundCloud. Try a different search term or a direct SoundCloud link."
+
 @bot.command()
 async def play(ctx, *, query: str):
-    try:
-        import yt_dlp
-    except ImportError:
-        await ctx.send("Music dependencies aren't installed.")
-        return
     if ctx.author.voice is None or ctx.author.voice.channel is None:
         await ctx.send("Join a voice channel first.")
         return
@@ -1389,52 +1468,40 @@ async def play(ctx, *, query: str):
         try:
             voice = await target_channel.connect(self_deaf=True)
         except Exception as e:
-            await ctx.send(f"Couldn't join voice: {e}")
+            await ctx.send(f"Couldn't join the voice channel: `{e}`")
             return
     elif voice.channel != target_channel:
         await voice.move_to(target_channel)
-    try:
-        await ctx.guild.change_voice_state(channel=target_channel, self_mute=False, self_deaf=True)
-    except Exception:
-        pass
 
-    await ctx.send(f"🔎 Searching for **{query}**...")
-    loop = asyncio.get_event_loop()
-    try:
-        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(query, download=False))
-    except Exception as e:
-        await ctx.send(f"Couldn't fetch that track: `{e}`")
-        return
+    is_url = query.startswith("http://") or query.startswith("https://")
+    search_msg = "🔗 Fetching that link..." if is_url else f"🔎 Searching SoundCloud for **{query}**..."
+    status = await ctx.send(search_msg)
+
+    info, source_or_err = await _fetch_track(query)
+
     if info is None:
-        await ctx.send("No results found.")
+        await status.edit(content=f"❌ {source_or_err}")
         return
-    if "entries" in info:
-        entries = [e for e in info["entries"] if e]
-        if not entries:
-            await ctx.send("No results found.")
-            return
-        info = entries[0]
-    stream_url = info.get("url")
+
+    stream_url = _get_stream_url(info)
     if not stream_url:
-        for fmt in info.get("formats", []) or []:
-            if fmt.get("acodec") and fmt.get("acodec") != "none" and fmt.get("url"):
-                stream_url = fmt["url"]
-                break
-    if not stream_url:
-        await ctx.send("Couldn't get a playable audio stream for that track.")
+        await status.edit(content="❌ Couldn't get a playable audio stream for that track.")
         return
+
     track = {
         "title": info.get("title", "Unknown"),
         "url": stream_url,
         "requester_id": ctx.author.id,
         "channel_id": ctx.channel.id,
+        "source": source_or_err,
     }
     music_queues.setdefault(ctx.guild.id, []).append(track)
+    await status.delete()
+
     if not voice.is_playing() and not voice.is_paused():
         await _play_next(ctx.guild.id)
     else:
-        await ctx.send(f"➕ Added to queue: **{track['title']}**")
+        await ctx.send(f"➕ Added to queue: **{track['title']}** `[{source_or_err}]`")
 
 @bot.command()
 async def skip(ctx):
