@@ -19,6 +19,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
+intents.presences = True  # REQUIRED FOR THE COOL STATUS AFK FEATURE
 
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
@@ -46,6 +47,7 @@ EIGHT_BALL_RESPONSES = [
     "My sources say no.", "Outlook not so good.", "Very doubtful.",
 ]
 
+# --- DATA LOADING FUNCTIONS ---
 
 def load_xp():
     global xp_data
@@ -58,14 +60,12 @@ def load_xp():
     else:
         xp_data = {}
 
-
 def save_xp():
     try:
         with open(XP_FILE, "w", encoding="utf-8") as f:
             json.dump(xp_data, f)
     except OSError:
         pass
-
 
 def load_warnings():
     global warnings_data
@@ -78,7 +78,6 @@ def load_warnings():
     else:
         warnings_data = {}
 
-
 def save_warnings():
     try:
         with open(WARNINGS_FILE, "w", encoding="utf-8") as f:
@@ -86,10 +85,8 @@ def save_warnings():
     except OSError:
         pass
 
-
 ECON_FILE = "economy.json"
 economy = {}
-
 
 def load_econ():
     global economy
@@ -102,7 +99,6 @@ def load_econ():
     else:
         economy = {}
 
-
 def save_econ():
     try:
         with open(ECON_FILE, "w", encoding="utf-8") as f:
@@ -110,6 +106,45 @@ def save_econ():
     except OSError:
         pass
 
+LEVEL_CHANNELS_FILE = "level_channels.json"
+level_channels = {}
+AFK_FILE = "afk.json"
+afk_users = {}
+afk_cooldowns = {}
+
+def load_level_channels():
+    global level_channels
+    if os.path.exists(LEVEL_CHANNELS_FILE):
+        try:
+            with open(LEVEL_CHANNELS_FILE, "r") as f:
+                level_channels = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            level_channels = {}
+
+def save_level_channels():
+    try:
+        with open(LEVEL_CHANNELS_FILE, "w") as f:
+            json.dump(level_channels, f)
+    except OSError:
+        pass
+
+def load_afk():
+    global afk_users
+    if os.path.exists(AFK_FILE):
+        try:
+            with open(AFK_FILE, "r") as f:
+                raw = json.load(f)
+            afk_users = {tuple(int(x) for x in k.split(":")): v for k, v in raw.items()}
+        except (json.JSONDecodeError, OSError, ValueError):
+            afk_users = {}
+
+def save_afk():
+    try:
+        serial = {f"{g}:{u}": v for (g, u), v in afk_users.items()}
+        with open(AFK_FILE, "w") as f:
+            json.dump(serial, f)
+    except OSError:
+        pass
 
 def get_econ(gid, uid):
     g = economy.setdefault(str(gid), {})
@@ -120,9 +155,9 @@ def get_econ(gid, uid):
         "inventory": [],
     })
 
-
 START_TIME = time.time()
 
+# --- UTILITY FUNCTIONS ---
 
 def fmt_uptime(seconds):
     days, seconds = divmod(int(seconds), 86400)
@@ -138,77 +173,22 @@ def fmt_uptime(seconds):
     parts.append(f"{secs}s")
     return " ".join(parts)
 
-
 def get_user_entry(guild_id, user_id):
     g = xp_data.setdefault(str(guild_id), {})
     return g.setdefault(str(user_id), {"message_xp": 0, "voice_xp": 0})
-
 
 def add_xp(guild_id, user_id, amount, kind):
     entry = get_user_entry(guild_id, user_id)
     entry[kind] = entry.get(kind, 0) + amount
 
-
 def total_xp(entry):
     return entry.get("message_xp", 0) + entry.get("voice_xp", 0)
-
 
 def level_from_xp(xp):
     return int(math.floor(math.sqrt(xp / 100)))
 
-
 def xp_for_level(level):
     return (level ** 2) * 100
-
-
-load_xp()
-load_warnings()
-load_econ()
-
-
-LEVEL_CHANNELS_FILE = "level_channels.json"
-level_channels = {}
-AFK_FILE = "afk.json"
-afk_users = {}
-
-
-def load_level_channels():
-    global level_channels
-    if os.path.exists(LEVEL_CHANNELS_FILE):
-        try:
-            with open(LEVEL_CHANNELS_FILE, "r") as f:
-                level_channels = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            level_channels = {}
-
-
-def save_level_channels():
-    try:
-        with open(LEVEL_CHANNELS_FILE, "w") as f:
-            json.dump(level_channels, f)
-    except OSError:
-        pass
-
-
-def load_afk():
-    global afk_users
-    if os.path.exists(AFK_FILE):
-        try:
-            with open(AFK_FILE, "r") as f:
-                raw = json.load(f)
-            afk_users = {tuple(int(x) for x in k.split(":")): v for k, v in raw.items()}
-        except (json.JSONDecodeError, OSError, ValueError):
-            afk_users = {}
-
-
-def save_afk():
-    try:
-        serial = {f"{g}:{u}": v for (g, u), v in afk_users.items()}
-        with open(AFK_FILE, "w") as f:
-            json.dump(serial, f)
-    except OSError:
-        pass
-
 
 def make_progress_bar(current, total, length=18):
     if total <= 0:
@@ -216,7 +196,6 @@ def make_progress_bar(current, total, length=18):
     pct = max(0.0, min(1.0, current / total))
     filled = int(pct * length)
     return "▰" * filled + "▱" * (length - filled)
-
 
 def humanize_seconds(s):
     s = int(max(0, s))
@@ -231,13 +210,11 @@ def humanize_seconds(s):
     d, h = divmod(h, 24)
     return f"{d}d {h}h"
 
-
 def get_level_channel(guild):
     cid = level_channels.get(str(guild.id))
     if cid is None:
         return None
     return guild.get_channel(int(cid))
-
 
 async def announce_level_up(member, fallback_channel, new_level, source):
     target = get_level_channel(member.guild) or fallback_channel
@@ -263,10 +240,21 @@ async def announce_level_up(member, fallback_channel, new_level, source):
     except (discord.Forbidden, discord.HTTPException):
         pass
 
+def parse_duration(text):
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    m = re.match(r"^(\d+)([smhd])$", text.lower())
+    if not m:
+        return None
+    return int(m.group(1)) * units[m.group(2)]
 
+# --- INITIALIZE DATA ---
+load_xp()
+load_warnings()
+load_econ()
 load_level_channels()
 load_afk()
 
+# --- BOT EVENTS ---
 
 @bot.event
 async def on_ready():
@@ -281,7 +269,6 @@ async def on_ready():
                 if not member.bot:
                     voice_sessions[(guild.id, member.id)] = time.time()
 
-
 @bot.event
 async def on_member_join(member):
     try:
@@ -289,43 +276,73 @@ async def on_member_join(member):
     except discord.Forbidden:
         pass
 
-
 @bot.event
 async def on_message(message):
     if message.author == bot.user or message.author.bot:
         return
 
     if message.guild is not None:
+        # --- COOLER AFK SYSTEM: RETURN FROM AFK ---
         key = (message.guild.id, message.author.id)
         if key in afk_users and not message.content.startswith(bot.command_prefix + "afk"):
             data = afk_users.pop(key)
             save_afk()
+            
+            # Reset Nickname
             try:
-                if data.get("old_nick") is not None or message.author.nick and message.author.nick.startswith("[AFK]"):
+                if data.get("old_nick") is not None or (message.author.nick and message.author.nick.startswith("[AFK]")):
                     await message.author.edit(nick=data.get("old_nick"))
             except (discord.Forbidden, discord.HTTPException):
                 pass
+
+            # Reset Discord Status (The "Cool" part)
+            try:
+                # We check current activities to clear the custom status without wiping Spotify/Game statuses
+                new_activities = [a for a in message.author.activities if not isinstance(a, discord.CustomActivity)]
+                await message.author.edit.activities=new_activities
+            except Exception:
+                pass
+
             try:
                 away = humanize_seconds(time.time() - data.get("since", time.time()))
-                await message.channel.send(
-                    f"👋 Welcome back {message.author.mention}! You were AFK for **{away}**."
+                embed = discord.Embed(
+                    description=f"👋 Welcome back {message.author.mention}! You were away for **{away}**.",
+                    color=discord.Color.green()
                 )
+                if data.get("image_url"):
+                    embed.set_thumbnail(url=data["image_url"])
+                await message.channel.send(embed=embed)
             except discord.Forbidden:
                 pass
+
+        # --- COOLER AFK SYSTEM: PINGING AN AFK USER ---
         if message.mentions:
             mentioned_msgs = []
+            # Regex to find actual raw mentions like <@123456789> to prevent substring false-positives
+            raw_mentions = re.findall(r'<@!?(\d+)>', message.content)
+            
             for u in message.mentions:
                 k = (message.guild.id, u.id)
-                if k in afk_users and u.id != message.author.id:
+                # Ensure they were actually pinged with a raw mention, not just talked about
+                if k in afk_users and u.id != message.author.id and str(u.id) in raw_mentions:
                     info = afk_users[k]
                     away = humanize_seconds(time.time() - info.get("since", time.time()))
-                    mentioned_msgs.append(f"💤 **{u.display_name}** is AFK: *{info['reason']}* — since {away} ago")
-            if mentioned_msgs:
+                    
+                    embed = discord.Embed(
+                        description=f"💤 **{u.display_name}** is currently AFK: *{info['reason']}*\n⏳ Away for {away}",
+                        color=discord.Color.light_grey()
+                    )
+                    if info.get("image_url"):
+                        embed.set_thumbnail(url=info["image_url"])
+                    mentioned_msgs.append(embed)
+            
+            for embed in mentioned_msgs:
                 try:
-                    await message.channel.send("\n".join(mentioned_msgs))
+                    await message.channel.send(embed=embed)
                 except discord.Forbidden:
                     pass
 
+    # --- WORD FILTER ---
     if "shit" in message.content.lower():
         try:
             await message.delete()
@@ -334,6 +351,7 @@ async def on_message(message):
             pass
         return
 
+    # --- MINI-GAMES INTERCEPTS ---
     if message.channel.id in number_games and message.content.strip().isdigit():
         game = number_games[message.channel.id]
         guess_val = int(message.content.strip())
@@ -376,6 +394,7 @@ async def on_message(message):
         await bot.process_commands(message)
         return
 
+    # --- PASSIVE XP ---
     if message.guild is not None and not message.content.startswith(bot.command_prefix):
         key = (message.guild.id, message.author.id)
         now = time.time()
@@ -393,7 +412,6 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-
 @bot.event
 async def on_voice_state_update(member, before, after):
     if member.bot:
@@ -404,6 +422,7 @@ async def on_voice_state_update(member, before, after):
     elif before.channel is not None and after.channel is None:
         voice_sessions.pop(key, None)
 
+# --- BACKGROUND TASKS ---
 
 @tasks.loop(minutes=1)
 async def voice_xp_tick():
@@ -432,7 +451,6 @@ async def voice_xp_tick():
                     if after_lvl > before_lvl:
                         await announce_level_up(member, vc, after_lvl, "voice")
 
-
 @tasks.loop(minutes=2)
 async def autosave():
     save_xp()
@@ -441,11 +459,11 @@ async def autosave():
     save_level_channels()
     save_afk()
 
+# --- BASIC COMMANDS ---
 
 @bot.command()
 async def hello(ctx):
     await ctx.send(f"Hello {ctx.author.mention}!")
-
 
 @bot.command()
 async def assign(ctx):
@@ -456,7 +474,6 @@ async def assign(ctx):
     else:
         await ctx.send("Role doesn't exist")
 
-
 @bot.command()
 async def remove(ctx):
     role = discord.utils.get(ctx.guild.roles, name=secret_role)
@@ -466,16 +483,13 @@ async def remove(ctx):
     else:
         await ctx.send("Role doesn't exist")
 
-
 @bot.command()
 async def dm(ctx, *, msg):
     await ctx.author.send(f"You said {msg}")
 
-
 @bot.command()
 async def reply(ctx):
     await ctx.reply("This is a reply to your message!")
-
 
 @bot.command()
 async def poll(ctx, *, question):
@@ -483,7 +497,6 @@ async def poll(ctx, *, question):
     poll_message = await ctx.send(embed=embed)
     await poll_message.add_reaction("👍")
     await poll_message.add_reaction("👎")
-
 
 @bot.command()
 async def serverinfo(ctx):
@@ -499,7 +512,6 @@ async def serverinfo(ctx):
     embed.add_field(name="Channels", value=len(guild.channels), inline=True)
     embed.add_field(name="Created", value=guild.created_at.strftime("%B %d, %Y"), inline=True)
     await ctx.send(embed=embed)
-
 
 @bot.command()
 async def userinfo(ctx, member: discord.Member = None):
@@ -517,7 +529,6 @@ async def userinfo(ctx, member: discord.Member = None):
     embed.add_field(name=f"Roles ({len(roles)})", value=" ".join(roles) if roles else "None", inline=False)
     await ctx.send(embed=embed)
 
-
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount: int):
@@ -528,7 +539,6 @@ async def clear(ctx, amount: int):
     confirm = await ctx.send(f"Deleted {len(deleted) - 1} message(s).")
     await confirm.delete(delay=3)
 
-
 @clear.error
 async def clear_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -536,6 +546,7 @@ async def clear_error(ctx, error):
     elif isinstance(error, commands.BadArgument) or isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !clear <number between 1 and 100>")
 
+# --- LEVELING COMMANDS ---
 
 @bot.command()
 async def rank(ctx, member: discord.Member = None):
@@ -581,7 +592,6 @@ async def rank(ctx, member: discord.Member = None):
     embed.set_footer(text="Keep chatting and chilling in voice to level up!")
     await ctx.send(embed=embed)
 
-
 @bot.command(name="toplevel", aliases=["levels", "topleveler", "topup"])
 async def toplevel(ctx):
     if ctx.guild is None:
@@ -616,7 +626,6 @@ async def toplevel(ctx):
     )
     await ctx.send(embed=embed)
 
-
 @bot.command(name="setlevelchannel", aliases=["levelchannel"])
 @commands.has_permissions(manage_guild=True)
 async def setlevelchannel(ctx, channel: discord.TextChannel = None):
@@ -627,7 +636,6 @@ async def setlevelchannel(ctx, channel: discord.TextChannel = None):
     level_channels[str(ctx.guild.id)] = target.id
     save_level_channels()
     await ctx.send(f"✅ Level-up announcements will now be sent in {target.mention}.")
-
 
 @bot.command(name="removelevelchannel", aliases=["unsetlevelchannel"])
 @commands.has_permissions(manage_guild=True)
@@ -641,7 +649,6 @@ async def removelevelchannel(ctx):
         await ctx.send("✅ Level-up announcements will fall back to the channel where the level happened.")
     else:
         await ctx.send("No level channel was set.")
-
 
 @bot.command(aliases=["leaderboard", "lb"])
 async def top(ctx, category: str = "total"):
@@ -690,12 +697,12 @@ async def top(ctx, category: str = "total"):
     embed.description = "\n".join(lines)
     await ctx.send(embed=embed)
 
+# --- MODERATION COMMANDS ---
 
 @bot.command()
 async def ping(ctx):
     latency_ms = round(bot.latency * 1000)
     await ctx.send(f"Pong! `{latency_ms}ms`")
-
 
 @bot.command()
 async def avatar(ctx, member: discord.Member = None):
@@ -703,7 +710,6 @@ async def avatar(ctx, member: discord.Member = None):
     embed = discord.Embed(title=f"{member.display_name}'s avatar")
     embed.set_image(url=member.display_avatar.url)
     await ctx.send(embed=embed)
-
 
 @bot.command()
 async def botinfo(ctx):
@@ -718,7 +724,6 @@ async def botinfo(ctx):
     embed.add_field(name="Prefix", value=str(bot.command_prefix), inline=True)
     await ctx.send(embed=embed)
 
-
 @bot.command()
 async def channelinfo(ctx, channel: discord.TextChannel = None):
     channel = channel or ctx.channel
@@ -731,7 +736,6 @@ async def channelinfo(ctx, channel: discord.TextChannel = None):
     if getattr(channel, "category", None):
         embed.add_field(name="Category", value=channel.category.name, inline=True)
     await ctx.send(embed=embed)
-
 
 @bot.command(name="roles")
 async def roles_cmd(ctx):
@@ -748,7 +752,6 @@ async def roles_cmd(ctx):
     embed = discord.Embed(title=f"Roles ({len(role_list)})", description=text)
     await ctx.send(embed=embed)
 
-
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def say(ctx, *, message: str):
@@ -758,14 +761,12 @@ async def say(ctx, *, message: str):
         pass
     await ctx.send(message)
 
-
 @say.error
 async def say_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Messages permission to use this.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !say <message>")
-
 
 @bot.command()
 @commands.has_permissions(kick_members=True)
@@ -782,7 +783,6 @@ async def kick(ctx, member: discord.Member, *, reason: str = "No reason provided
     except discord.Forbidden:
         await ctx.send("I don't have permission to kick that member.")
 
-
 @kick.error
 async def kick_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -791,7 +791,6 @@ async def kick_error(ctx, error):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !kick @member [reason]")
-
 
 @bot.command()
 @commands.has_permissions(ban_members=True)
@@ -808,7 +807,6 @@ async def ban(ctx, member: discord.Member, *, reason: str = "No reason provided"
     except discord.Forbidden:
         await ctx.send("I don't have permission to ban that member.")
 
-
 @ban.error
 async def ban_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -817,7 +815,6 @@ async def ban_error(ctx, error):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !ban @member [reason]")
-
 
 @bot.command()
 @commands.has_permissions(ban_members=True)
@@ -831,14 +828,12 @@ async def unban(ctx, user_id: int, *, reason: str = "No reason provided"):
     except discord.Forbidden:
         await ctx.send("I don't have permission to unban users.")
 
-
 @unban.error
 async def unban_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Ban Members permission.")
     elif isinstance(error, (commands.BadArgument, commands.MissingRequiredArgument)):
         await ctx.send("Usage: !unban <user_id> [reason]")
-
 
 @bot.command()
 @commands.has_permissions(moderate_members=True)
@@ -853,7 +848,6 @@ async def mute(ctx, member: discord.Member, minutes: int = 10, *, reason: str = 
     except discord.Forbidden:
         await ctx.send("I don't have permission to time out that member.")
 
-
 @mute.error
 async def mute_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -862,7 +856,6 @@ async def mute_error(ctx, error):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !mute @member [minutes] [reason]")
-
 
 @bot.command()
 @commands.has_permissions(moderate_members=True)
@@ -873,7 +866,6 @@ async def unmute(ctx, member: discord.Member):
     except discord.Forbidden:
         await ctx.send("I don't have permission to remove the timeout.")
 
-
 @unmute.error
 async def unmute_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -882,7 +874,6 @@ async def unmute_error(ctx, error):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !unmute @member")
-
 
 @bot.command()
 @commands.has_permissions(kick_members=True)
@@ -900,7 +891,6 @@ async def warn(ctx, member: discord.Member, *, reason: str = "No reason provided
     save_warnings()
     await ctx.send(f"Warned {member.mention}. They now have {len(user_warns)} warning(s). Reason: {reason}")
 
-
 @warn.error
 async def warn_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -909,7 +899,6 @@ async def warn_error(ctx, error):
         await ctx.send("Member not found.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !warn @member [reason]")
-
 
 @bot.command()
 async def warnings(ctx, member: discord.Member = None):
@@ -927,7 +916,6 @@ async def warnings(ctx, member: discord.Member = None):
         embed.add_field(name=f"#{i} - {when}", value=f"By {mod_name}: {w['reason']}", inline=False)
     await ctx.send(embed=embed)
 
-
 @bot.command(name="clearwarns")
 @commands.has_permissions(kick_members=True)
 async def clearwarns(ctx, member: discord.Member):
@@ -939,23 +927,21 @@ async def clearwarns(ctx, member: discord.Member):
     else:
         await ctx.send(f"{member.display_name} has no warnings.")
 
+# --- FUN & GAMES ---
 
 @bot.command(name="8ball")
 async def eight_ball(ctx, *, question: str):
     await ctx.send(f"🎱 **Question:** {question}\n**Answer:** {random.choice(EIGHT_BALL_RESPONSES)}")
-
 
 @eight_ball.error
 async def eight_ball_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !8ball <question>")
 
-
 @bot.command()
 async def coinflip(ctx):
     result = random.choice(["Heads", "Tails"])
     await ctx.send(f"🪙 {result}!")
-
 
 @bot.command()
 async def dice(ctx, sides: int = 6):
@@ -963,7 +949,6 @@ async def dice(ctx, sides: int = 6):
         await ctx.send("Pick a number of sides between 2 and 1000.")
         return
     await ctx.send(f"🎲 You rolled a **{random.randint(1, sides)}** (d{sides})")
-
 
 @bot.command()
 @commands.has_permissions(manage_nicknames=True)
@@ -977,7 +962,6 @@ async def nickname(ctx, member: discord.Member, *, new_nick: str = None):
     except discord.Forbidden:
         await ctx.send("I don't have permission to change that nickname.")
 
-
 @nickname.error
 async def nickname_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -987,12 +971,10 @@ async def nickname_error(ctx, error):
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !nickname @member [new nickname]  (omit to reset)")
 
-
 @bot.command(name="timeout")
 @commands.has_permissions(moderate_members=True)
 async def timeout_cmd(ctx, member: discord.Member, minutes: int = 10, *, reason: str = "No reason provided"):
     await mute(ctx, member, minutes, reason=reason)
-
 
 @bot.command(name="createchannel")
 @commands.has_permissions(manage_channels=True)
@@ -1010,14 +992,12 @@ async def createchannel(ctx, channel_type: str, *, name: str):
     except discord.Forbidden:
         await ctx.send("I don't have permission to create channels.")
 
-
 @createchannel.error
 async def createchannel_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Channels permission.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !createchannel <text|voice> <name>")
-
 
 @bot.command(name="deletechannel")
 @commands.has_permissions(manage_channels=True)
@@ -1031,12 +1011,10 @@ async def deletechannel(ctx, channel: discord.abc.GuildChannel = None):
     except discord.Forbidden:
         await ctx.send("I don't have permission to delete that channel.")
 
-
 @deletechannel.error
 async def deletechannel_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Channels permission.")
-
 
 @bot.command(name="addrole")
 @commands.has_permissions(manage_roles=True)
@@ -1053,14 +1031,12 @@ async def addrole(ctx, member: discord.Member, *, role: discord.Role):
     except discord.Forbidden:
         await ctx.send("I don't have permission to add that role.")
 
-
 @addrole.error
 async def addrole_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Roles permission.")
     elif isinstance(error, (commands.MissingRequiredArgument, commands.RoleNotFound, commands.MemberNotFound)):
         await ctx.send("Usage: !addrole @member <role name>")
-
 
 @bot.command(name="removerole")
 @commands.has_permissions(manage_roles=True)
@@ -1077,22 +1053,12 @@ async def removerole(ctx, member: discord.Member, *, role: discord.Role):
     except discord.Forbidden:
         await ctx.send("I don't have permission to remove that role.")
 
-
 @removerole.error
 async def removerole_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Roles permission.")
     elif isinstance(error, (commands.MissingRequiredArgument, commands.RoleNotFound, commands.MemberNotFound)):
         await ctx.send("Usage: !removerole @member <role name>")
-
-
-def parse_duration(text):
-    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    m = re.match(r"^(\d+)([smhd])$", text.lower())
-    if not m:
-        return None
-    return int(m.group(1)) * units[m.group(2)]
-
 
 @bot.command()
 @commands.has_permissions(manage_guild=True)
@@ -1133,14 +1099,12 @@ async def giveaway(ctx, duration: str, *, prize: str):
     winner = random.choice(users)
     await ctx.send(f"🎉 **{winner.mention}** won **{prize}**! Hosted by {ctx.author.mention}.")
 
-
 @giveaway.error
 async def giveaway_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You need the Manage Server permission to start a giveaway.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("Usage: !giveaway <duration> <prize>  (e.g. `!giveaway 5m Nitro`)")
-
 
 @bot.command()
 async def rps(ctx, choice: str = None):
@@ -1159,9 +1123,7 @@ async def rps(ctx, choice: str = None):
     emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
     await ctx.send(f"You: {emojis[user]} {user}\nMe: {emojis[bot_choice]} {bot_choice}\n**{result}**")
 
-
 number_games = {}
-
 
 @bot.command()
 async def guess(ctx):
@@ -1174,7 +1136,6 @@ async def guess(ctx):
         "Send your guesses in chat. Type `!stopgame` to give up."
     )
 
-
 @bot.command()
 async def stopgame(ctx):
     game = number_games.pop(ctx.channel.id, None)
@@ -1185,7 +1146,6 @@ async def stopgame(ctx):
         await ctx.send(f"Game ended. The word was **{hangman['word']}**.")
     else:
         await ctx.send("No game is running here.")
-
 
 @bot.command()
 async def slot(ctx):
@@ -1200,7 +1160,6 @@ async def slot(ctx):
         result = "💀 No match. Try again!"
     await ctx.send(f"🎰 [ {line} ]\n{result}")
 
-
 TRIVIA_QUESTIONS = [
     ("What is the capital of France?", "paris"),
     ("How many continents are there?", "7"),
@@ -1213,7 +1172,6 @@ TRIVIA_QUESTIONS = [
     ("What is the chemical symbol for gold?", "au"),
     ("What is the tallest mountain in the world?", "everest"),
 ]
-
 
 @bot.command()
 async def trivia(ctx):
@@ -1232,7 +1190,6 @@ async def trivia(ctx):
     except asyncio.TimeoutError:
         await ctx.send(f"⏰ Time's up! The answer was **{answer}**.")
 
-
 HANGMAN_WORDS = [
     "python", "discord", "computer", "elephant", "rainbow",
     "guitar", "mountain", "keyboard", "javascript", "developer",
@@ -1249,7 +1206,6 @@ HANGMAN_STAGES = [
     "```\n  +---+\n  O   |\n /|\\  |\n / \\  |\n     ===```",
 ]
 
-
 def render_hangman(game):
     revealed = " ".join(c if c in game["guessed"] else "_" for c in game["word"])
     wrong = " ".join(sorted(game["wrong"])) or "none"
@@ -1260,7 +1216,6 @@ def render_hangman(game):
         f"Type a single letter to guess, or `!stopgame` to give up."
     )
 
-
 @bot.command()
 async def hangman(ctx):
     if ctx.channel.id in hangman_games:
@@ -1270,6 +1225,7 @@ async def hangman(ctx):
     hangman_games[ctx.channel.id] = {"word": word, "guessed": set(), "wrong": set()}
     await ctx.send("🪢 Started a hangman game!\n" + render_hangman(hangman_games[ctx.channel.id]))
 
+# --- MUSIC ---
 
 music_queues = {}
 YDL_OPTS = {
@@ -1289,7 +1245,6 @@ FFMPEG_OPTS = {
     "options": "-vn -loglevel warning",
 }
 
-
 def _play_next_callback(guild_id, error):
     if error:
         print(f"Player error: {error}")
@@ -1298,7 +1253,6 @@ def _play_next_callback(guild_id, error):
         fut.result()
     except Exception as e:
         print(f"play_next error: {e}")
-
 
 async def _play_next(guild_id):
     guild = bot.get_guild(guild_id)
@@ -1317,7 +1271,6 @@ async def _play_next(guild_id):
             await channel.send(f"▶️ Now playing: **{track['title']}**")
         except discord.Forbidden:
             pass
-
 
 @bot.command()
 async def play(ctx, *, query: str):
@@ -1382,7 +1335,6 @@ async def play(ctx, *, query: str):
     else:
         await ctx.send(f"➕ Added to queue: **{track['title']}**")
 
-
 @bot.command()
 async def skip(ctx):
     voice = ctx.guild.voice_client
@@ -1391,7 +1343,6 @@ async def skip(ctx):
         await ctx.send("⏭️ Skipped.")
     else:
         await ctx.send("Nothing is playing.")
-
 
 @bot.command()
 async def pause(ctx):
@@ -1402,7 +1353,6 @@ async def pause(ctx):
     else:
         await ctx.send("Nothing is playing.")
 
-
 @bot.command()
 async def resume(ctx):
     voice = ctx.guild.voice_client
@@ -1411,7 +1361,6 @@ async def resume(ctx):
         await ctx.send("▶️ Resumed.")
     else:
         await ctx.send("Nothing is paused.")
-
 
 @bot.command()
 async def stop(ctx):
@@ -1424,7 +1373,6 @@ async def stop(ctx):
     else:
         await ctx.send("I'm not in a voice channel.")
 
-
 @bot.command(name="queue", aliases=["q"])
 async def queue_cmd(ctx):
     queue = music_queues.get(ctx.guild.id, [])
@@ -1435,7 +1383,6 @@ async def queue_cmd(ctx):
     extra = "" if len(queue) <= 10 else f"\n...and {len(queue) - 10} more"
     embed = discord.Embed(title="🎶 Music Queue", description="\n".join(lines) + extra)
     await ctx.send(embed=embed)
-
 
 @bot.command(name="join")
 async def join_voice(ctx):
@@ -1453,7 +1400,6 @@ async def join_voice(ctx):
         pass
     await ctx.send(f"🎧 Joined **{target.name}** (deafened).")
 
-
 @bot.command(name="leave")
 async def leave_voice(ctx):
     voice = ctx.guild.voice_client
@@ -1464,10 +1410,10 @@ async def leave_voice(ctx):
     else:
         await ctx.send("I'm not in a voice channel.")
 
+# --- SNIPE ---
 
 sniped = {}
 edit_sniped = {}
-
 
 @bot.event
 async def on_message_delete(message):
@@ -1479,7 +1425,6 @@ async def on_message_delete(message):
         "content": message.content or "(empty / non-text content)",
         "time": int(time.time()),
     }
-
 
 @bot.event
 async def on_message_edit(before, after):
@@ -1493,7 +1438,6 @@ async def on_message_edit(before, after):
         "time": int(time.time()),
     }
 
-
 @bot.command()
 async def snipe(ctx):
     s = sniped.get(ctx.channel.id)
@@ -1504,7 +1448,6 @@ async def snipe(ctx):
     embed.set_author(name=s["author"], icon_url=s["author_avatar"])
     embed.set_footer(text=f"Deleted • {time.strftime('%H:%M:%S', time.gmtime(s['time']))} UTC")
     await ctx.send(embed=embed)
-
 
 @bot.command()
 async def editsnipe(ctx):
@@ -1519,48 +1462,41 @@ async def editsnipe(ctx):
     embed.set_footer(text=f"Edited • {time.strftime('%H:%M:%S', time.gmtime(s['time']))} UTC")
     await ctx.send(embed=embed)
 
+# --- TEXT MANIPULATION ---
 
 @bot.command()
 async def reverse(ctx, *, text: str):
     await ctx.send(text[::-1][:2000])
 
-
 @bot.command()
 async def upper(ctx, *, text: str):
     await ctx.send(text.upper()[:2000])
-
 
 @bot.command()
 async def lower(ctx, *, text: str):
     await ctx.send(text.lower()[:2000])
 
-
 @bot.command()
 async def title(ctx, *, text: str):
     await ctx.send(text.title()[:2000])
-
 
 @bot.command()
 async def capitalize(ctx, *, text: str):
     await ctx.send(text.capitalize()[:2000])
 
-
 @bot.command(name="len")
 async def len_cmd(ctx, *, text: str):
     await ctx.send(f"📏 **{len(text)}** characters, **{len(text.split())}** word(s).")
-
 
 @bot.command()
 async def rot13(ctx, *, text: str):
     import codecs
     await ctx.send(codecs.encode(text, "rot_13")[:2000])
 
-
 @bot.command()
 async def base64encode(ctx, *, text: str):
     import base64
     await ctx.send(f"`{base64.b64encode(text.encode()).decode()[:1990]}`")
-
 
 @bot.command()
 async def base64decode(ctx, *, text: str):
@@ -1570,7 +1506,6 @@ async def base64decode(ctx, *, text: str):
         await ctx.send(out[:2000] or "(empty)")
     except Exception:
         await ctx.send("That doesn't look like valid base64.")
-
 
 MORSE = {
     "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.",
@@ -1583,51 +1518,42 @@ MORSE = {
 }
 INV_MORSE = {v: k for k, v in MORSE.items()}
 
-
 @bot.command()
 async def morse(ctx, *, text: str):
     out = " ".join(MORSE.get(c, "?") for c in text.upper() if c.strip())
     await ctx.send(out[:2000] or "Nothing to encode.")
-
 
 @bot.command()
 async def unmorse(ctx, *, text: str):
     out = "".join(INV_MORSE.get(t, "?") for t in text.split())
     await ctx.send(out[:2000] or "Nothing to decode.")
 
-
 @bot.command()
 async def leetspeak(ctx, *, text: str):
     table = str.maketrans("aeiostlAEIOSTL", "43105714310571")
     await ctx.send(text.translate(table)[:2000])
 
-
 @bot.command()
 async def mock(ctx, *, text: str):
     await ctx.send("".join(c.upper() if i % 2 else c.lower() for i, c in enumerate(text))[:2000])
-
 
 @bot.command()
 async def uwu(ctx, *, text: str):
     out = text.translate(str.maketrans("rlRL", "wwWW"))
     await ctx.send((out + " uwu")[:2000])
 
-
 @bot.command()
 async def owoify(ctx, *, text: str):
     out = text.translate(str.maketrans("rlRL", "wwWW"))
     await ctx.send((out + " OwO")[:2000])
 
-
 @bot.command()
 async def clap(ctx, *, text: str):
     await ctx.send(" 👏 ".join(text.split())[:2000])
 
-
 @bot.command()
 async def stretch(ctx, *, text: str):
     await ctx.send(" ".join(text)[:2000])
-
 
 @bot.command()
 async def vapor(ctx, *, text: str):
@@ -1635,13 +1561,11 @@ async def vapor(ctx, *, text: str):
     table[" "] = "  "
     await ctx.send("".join(table.get(c, c) for c in text)[:2000])
 
-
 @bot.command()
 async def bubble(ctx, *, text: str):
     src = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
     dst = "ⓐⓑⓒⓓⓔⓕⓖⓗⓘⓙⓚⓛⓜⓝⓞⓟⓠⓡⓢⓣⓤⓥⓦⓧⓨⓩⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏ"
     await ctx.send(text.translate(str.maketrans(src, dst))[:2000])
-
 
 @bot.command()
 async def emojify(ctx, *, text: str):
@@ -1657,24 +1581,21 @@ async def emojify(ctx, *, text: str):
     msg = " ".join(out)
     await ctx.send(msg[:2000] or "(nothing)")
 
-
 import hashlib
-
 
 @bot.command()
 async def md5(ctx, *, text: str):
     await ctx.send(f"`{hashlib.md5(text.encode()).hexdigest()}`")
 
-
 @bot.command()
 async def sha256(ctx, *, text: str):
     await ctx.send(f"`{hashlib.sha256(text.encode()).hexdigest()}`")
-
 
 @bot.command()
 async def sha1(ctx, *, text: str):
     await ctx.send(f"`{hashlib.sha1(text.encode()).hexdigest()}`")
 
+# --- MATH ---
 
 @bot.command()
 async def calc(ctx, *, expr: str):
@@ -1687,21 +1608,17 @@ async def calc(ctx, *, expr: str):
     except Exception as e:
         await ctx.send(f"Error: {e}")
 
-
 @bot.command()
 async def add(ctx, a: float, b: float):
     await ctx.send(f"{a} + {b} = **{a + b}**")
-
 
 @bot.command()
 async def sub(ctx, a: float, b: float):
     await ctx.send(f"{a} − {b} = **{a - b}**")
 
-
 @bot.command()
 async def mul(ctx, a: float, b: float):
     await ctx.send(f"{a} × {b} = **{a * b}**")
-
 
 @bot.command()
 async def div(ctx, a: float, b: float):
@@ -1710,14 +1627,12 @@ async def div(ctx, a: float, b: float):
         return
     await ctx.send(f"{a} ÷ {b} = **{a / b}**")
 
-
 @bot.command()
 async def mod(ctx, a: int, b: int):
     if b == 0:
         await ctx.send("Cannot mod by zero.")
         return
     await ctx.send(f"{a} mod {b} = **{a % b}**")
-
 
 @bot.command(name="pow")
 async def pow_cmd(ctx, a: float, b: float):
@@ -1726,7 +1641,6 @@ async def pow_cmd(ctx, a: float, b: float):
     except OverflowError:
         await ctx.send("Result too large.")
 
-
 @bot.command()
 async def sqrt(ctx, n: float):
     if n < 0:
@@ -1734,11 +1648,9 @@ async def sqrt(ctx, n: float):
         return
     await ctx.send(f"√{n} = **{math.sqrt(n)}**")
 
-
 @bot.command(name="abs")
 async def abs_cmd(ctx, n: float):
     await ctx.send(f"|{n}| = **{n if n >= 0 else -n}**")
-
 
 @bot.command()
 async def factorial(ctx, n: int):
@@ -1746,7 +1658,6 @@ async def factorial(ctx, n: int):
         await ctx.send("Pick a number between 0 and 100.")
         return
     await ctx.send(f"{n}! = **{math.factorial(n)}**")
-
 
 @bot.command()
 async def fib(ctx, n: int):
@@ -1760,7 +1671,6 @@ async def fib(ctx, n: int):
     if len(s) > 1900:
         s = s[:1900] + "..."
     await ctx.send(f"fib({n}) = **{s}**")
-
 
 @bot.command()
 async def isprime(ctx, n: int):
@@ -1779,11 +1689,9 @@ async def isprime(ctx, n: int):
             return
     await ctx.send(f"{n} is prime.")
 
-
 @bot.command()
 async def gcd(ctx, a: int, b: int):
     await ctx.send(f"gcd({a}, {b}) = **{math.gcd(a, b)}**")
-
 
 @bot.command()
 async def lcm(ctx, a: int, b: int):
@@ -1792,7 +1700,6 @@ async def lcm(ctx, a: int, b: int):
         return
     await ctx.send(f"lcm({a}, {b}) = **{abs(a * b) // math.gcd(a, b)}**")
 
-
 @bot.command()
 async def percent(ctx, value: float, total: float):
     if total == 0:
@@ -1800,46 +1707,39 @@ async def percent(ctx, value: float, total: float):
         return
     await ctx.send(f"{value} / {total} = **{value / total * 100:.2f}%**")
 
+# --- CONVERSIONS ---
 
 @bot.command()
 async def c2f(ctx, c: float):
     await ctx.send(f"{c}°C = **{c * 9 / 5 + 32:.2f}°F**")
 
-
 @bot.command()
 async def f2c(ctx, f: float):
     await ctx.send(f"{f}°F = **{(f - 32) * 5 / 9:.2f}°C**")
-
 
 @bot.command()
 async def km2mi(ctx, km: float):
     await ctx.send(f"{km} km = **{km * 0.621371:.3f} mi**")
 
-
 @bot.command()
 async def mi2km(ctx, mi: float):
     await ctx.send(f"{mi} mi = **{mi * 1.60934:.3f} km**")
-
 
 @bot.command()
 async def kg2lb(ctx, kg: float):
     await ctx.send(f"{kg} kg = **{kg * 2.20462:.3f} lb**")
 
-
 @bot.command()
 async def lb2kg(ctx, lb: float):
     await ctx.send(f"{lb} lb = **{lb * 0.453592:.3f} kg**")
-
 
 @bot.command()
 async def m2ft(ctx, m: float):
     await ctx.send(f"{m} m = **{m * 3.28084:.3f} ft**")
 
-
 @bot.command()
 async def ft2m(ctx, ft: float):
     await ctx.send(f"{ft} ft = **{ft * 0.3048:.3f} m**")
-
 
 @bot.command()
 async def bin2dec(ctx, b: str):
@@ -1848,11 +1748,9 @@ async def bin2dec(ctx, b: str):
     except ValueError:
         await ctx.send("That's not valid binary.")
 
-
 @bot.command()
 async def dec2bin(ctx, n: int):
     await ctx.send(f"{n} = `{bin(n)[2:] if n >= 0 else '-' + bin(n)[3:]}`")
-
 
 @bot.command()
 async def hex2dec(ctx, h: str):
@@ -1861,11 +1759,9 @@ async def hex2dec(ctx, h: str):
     except ValueError:
         await ctx.send("That's not valid hex.")
 
-
 @bot.command()
 async def dec2hex(ctx, n: int):
     await ctx.send(f"{n} = `{hex(n)[2:].upper() if n >= 0 else '-' + hex(n)[3:].upper()}`")
-
 
 @bot.command()
 async def oct2dec(ctx, o: str):
@@ -1874,11 +1770,11 @@ async def oct2dec(ctx, o: str):
     except ValueError:
         await ctx.send("That's not valid octal.")
 
-
 @bot.command()
 async def dec2oct(ctx, n: int):
     await ctx.send(f"{n} = `{oct(n)[2:] if n >= 0 else '-' + oct(n)[3:]}`")
 
+# --- RANDOM & PICK ---
 
 @bot.command()
 async def choose(ctx, *, options: str):
@@ -1888,7 +1784,6 @@ async def choose(ctx, *, options: str):
         return
     await ctx.send(f"🎯 I choose: **{random.choice(items)}**")
 
-
 @bot.command()
 async def shuffle(ctx, *, items: str):
     arr = [s.strip() for s in items.split(",") if s.strip()]
@@ -1897,7 +1792,6 @@ async def shuffle(ctx, *, items: str):
         return
     random.shuffle(arr)
     await ctx.send(", ".join(arr)[:2000])
-
 
 @bot.command()
 async def password(ctx, length: int = 16):
@@ -1913,14 +1807,12 @@ async def password(ctx, length: int = 16):
     except discord.Forbidden:
         await ctx.send("Open your DMs so I can send your password privately.")
 
-
 @bot.command()
 async def color(ctx):
     rgb = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
     hexv = "{:02X}{:02X}{:02X}".format(*rgb)
     embed = discord.Embed(title=f"#{hexv}", description=f"RGB({rgb[0]}, {rgb[1]}, {rgb[2]})", color=int(hexv, 16))
     await ctx.send(embed=embed)
-
 
 @bot.command()
 async def rng(ctx, low: int = 1, high: int = 100):
@@ -1929,11 +1821,9 @@ async def rng(ctx, low: int = 1, high: int = 100):
         return
     await ctx.send(f"🎲 {random.randint(low, high)}")
 
-
 @bot.command()
 async def rate(ctx, *, thing: str):
     await ctx.send(f"I rate **{thing}** a **{random.randint(1, 10)}/10**.")
-
 
 @bot.command()
 async def ship(ctx, a: discord.Member, b: discord.Member):
@@ -1942,11 +1832,9 @@ async def ship(ctx, a: discord.Member, b: discord.Member):
     name = (a.display_name[:4] + b.display_name[-4:]).capitalize()
     await ctx.send(f"💕 **{a.display_name} + {b.display_name}** = **{name}**\n[{'█' * bars}{'░' * (10 - bars)}] **{pct}%**")
 
-
 @bot.command()
 async def decide(ctx, *, question: str):
     await ctx.send(random.choice(["✅ Yes.", "❌ No.", "🤔 Maybe.", "💯 Definitely.", "🚫 Absolutely not.", "⏳ Ask later."]))
-
 
 WYR = [
     "have super strength or super speed?",
@@ -1958,11 +1846,9 @@ WYR = [
     "fight 100 duck-sized horses or 1 horse-sized duck?",
 ]
 
-
 @bot.command()
 async def wyr(ctx):
     await ctx.send(f"❓ Would you rather **{random.choice(WYR)}**")
-
 
 THIS_OR_THAT = [
     ("Pizza", "Burgers"), ("Cats", "Dogs"), ("Coffee", "Tea"),
@@ -1970,30 +1856,27 @@ THIS_OR_THAT = [
     ("Sweet", "Salty"), ("Day", "Night"), ("Texting", "Calling"),
 ]
 
-
 @bot.command()
 async def thisorthat(ctx):
     a, b = random.choice(THIS_OR_THAT)
     await ctx.send(f"⚖️ **{a}** or **{b}**?")
 
+# --- TIME & DATE ---
 
 @bot.command(name="time")
 async def time_cmd(ctx):
     now = datetime.datetime.utcnow()
     await ctx.send(f"🕒 UTC time: **{now.strftime('%H:%M:%S')}**")
 
-
 @bot.command()
 async def date(ctx):
     now = datetime.datetime.utcnow()
     await ctx.send(f"📅 UTC date: **{now.strftime('%A, %B %d, %Y')}**")
 
-
 @bot.command()
 async def timestamp(ctx):
     t = int(time.time())
     await ctx.send(f"⏱️ Unix timestamp: **{t}** (`<t:{t}:F>`)")
-
 
 @bot.command()
 async def age(ctx, year: int):
@@ -2003,17 +1886,14 @@ async def age(ctx, year: int):
         return
     await ctx.send(f"You're about **{cur - year}** years old.")
 
-
 @bot.command()
 async def weekday(ctx):
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     await ctx.send(f"📆 Today (UTC) is **{days[datetime.datetime.utcnow().weekday()]}**.")
 
-
 @bot.command()
 async def uptime(ctx):
     await ctx.send(f"⏱️ Uptime: **{fmt_uptime(time.time() - START_TIME)}**")
-
 
 @bot.command()
 async def remindme(ctx, duration: str, *, message: str):
@@ -2027,7 +1907,6 @@ async def remindme(ctx, duration: str, *, message: str):
         await ctx.send(f"⏰ {ctx.author.mention} reminder: {message}")
     except discord.HTTPException:
         pass
-
 
 @bot.command()
 async def countdown(ctx, n: int = 5):
@@ -2047,43 +1926,37 @@ async def countdown(ctx, n: int = 5):
     except discord.HTTPException:
         pass
 
+# --- SERVER STATS ---
 
 @bot.command()
 async def membercount(ctx):
     await ctx.send(f"👥 **{ctx.guild.member_count}** members")
-
 
 @bot.command()
 async def humancount(ctx):
     n = sum(1 for m in ctx.guild.members if not m.bot)
     await ctx.send(f"👤 **{n}** humans")
 
-
 @bot.command()
 async def botcount(ctx):
     n = sum(1 for m in ctx.guild.members if m.bot)
     await ctx.send(f"🤖 **{n}** bots")
 
-
 @bot.command()
 async def channelcount(ctx):
     await ctx.send(f"📺 **{len(ctx.guild.channels)}** total channels")
-
 
 @bot.command()
 async def textchannels(ctx):
     await ctx.send(f"💬 **{len(ctx.guild.text_channels)}** text channels")
 
-
 @bot.command()
 async def voicechannels(ctx):
     await ctx.send(f"🎙️ **{len(ctx.guild.voice_channels)}** voice channels")
 
-
 @bot.command()
 async def rolecount(ctx):
     await ctx.send(f"🏷️ **{len(ctx.guild.roles)}** roles")
-
 
 @bot.command()
 async def emojis(ctx):
@@ -2095,22 +1968,18 @@ async def emojis(ctx):
     extra = "" if len(e) <= 30 else f"\n...and {len(e) - 30} more"
     await ctx.send(text + extra)
 
-
 @bot.command()
 async def emojicount(ctx):
     await ctx.send(f"😀 **{len(ctx.guild.emojis)}** custom emojis")
-
 
 @bot.command()
 async def boostcount(ctx):
     await ctx.send(f"🚀 Boost level **{ctx.guild.premium_tier}** with **{ctx.guild.premium_subscription_count}** boosts")
 
-
 @bot.command()
 async def owner(ctx):
     o = ctx.guild.owner
     await ctx.send(f"👑 Server owner: {o.mention if o else 'unknown'}")
-
 
 @bot.command()
 async def oldestmember(ctx):
@@ -2121,7 +1990,6 @@ async def oldestmember(ctx):
     m = min(members, key=lambda x: x.joined_at)
     await ctx.send(f"🕰️ Oldest member: {m.mention} (joined {m.joined_at.strftime('%Y-%m-%d')})")
 
-
 @bot.command()
 async def newestmember(ctx):
     members = [m for m in ctx.guild.members if not m.bot and m.joined_at]
@@ -2130,7 +1998,6 @@ async def newestmember(ctx):
         return
     m = max(members, key=lambda x: x.joined_at)
     await ctx.send(f"🌱 Newest member: {m.mention} (joined {m.joined_at.strftime('%Y-%m-%d')})")
-
 
 @bot.command()
 async def servericon(ctx):
@@ -2141,7 +2008,6 @@ async def servericon(ctx):
     else:
         await ctx.send("This server has no icon.")
 
-
 @bot.command()
 async def serverbanner(ctx):
     if ctx.guild.banner:
@@ -2151,6 +2017,7 @@ async def serverbanner(ctx):
     else:
         await ctx.send("This server has no banner.")
 
+# --- USER STATS ---
 
 @bot.command()
 async def userbanner(ctx, member: discord.Member = None):
@@ -2163,7 +2030,6 @@ async def userbanner(ctx, member: discord.Member = None):
     else:
         await ctx.send(f"{member.display_name} has no banner set.")
 
-
 @bot.command()
 async def joinposition(ctx, member: discord.Member = None):
     member = member or ctx.author
@@ -2174,29 +2040,24 @@ async def joinposition(ctx, member: discord.Member = None):
     pos = members.index(member) + 1 if member in members else "?"
     await ctx.send(f"{member.mention} joined as member **#{pos}**")
 
-
 @bot.command()
 async def accountage(ctx, member: discord.Member = None):
     member = member or ctx.author
     days = (datetime.datetime.now(datetime.timezone.utc) - member.created_at).days
     await ctx.send(f"{member.mention}'s account is **{days}** days old.")
 
-
 @bot.command()
 async def myid(ctx):
     await ctx.send(f"Your ID: `{ctx.author.id}`")
-
 
 @bot.command(name="mention")
 async def mention_cmd(ctx, member: discord.Member):
     await ctx.send(f"`{member.mention}`")
 
-
 @bot.command()
 async def myroles(ctx):
     roles = [r.mention for r in ctx.author.roles if r.name != "@everyone"]
     await ctx.send("Your roles: " + (", ".join(roles) if roles else "none"))
-
 
 @bot.command()
 async def perms(ctx, member: discord.Member = None):
@@ -2207,11 +2068,11 @@ async def perms(ctx, member: discord.Member = None):
         (", ".join(perms_list[:25]) + ("..." if len(perms_list) > 25 else "") if perms_list else "none")
     )
 
-
 @bot.command()
 async def isbot(ctx, member: discord.Member):
     await ctx.send(f"{'🤖 Yes, ' + member.display_name + ' is a bot.' if member.bot else '👤 No, ' + member.display_name + ' is human.'}")
 
+# --- CHANNEL MANAGEMENT ---
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
@@ -2221,7 +2082,6 @@ async def lock(ctx):
     await ctx.channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
     await ctx.send("🔒 Channel locked.")
 
-
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def unlock(ctx):
@@ -2229,7 +2089,6 @@ async def unlock(ctx):
     overwrite.send_messages = None
     await ctx.channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
     await ctx.send("🔓 Channel unlocked.")
-
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
@@ -2240,7 +2099,6 @@ async def slowmode(ctx, seconds: int):
     await ctx.channel.edit(slowmode_delay=seconds)
     await ctx.send(f"🐌 Slowmode set to **{seconds}s**.")
 
-
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def renamechannel(ctx, *, name: str):
@@ -2248,13 +2106,11 @@ async def renamechannel(ctx, *, name: str):
     await ctx.channel.edit(name=name)
     await ctx.send(f"Renamed `#{old}` to `#{name}`.")
 
-
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def settopic(ctx, *, topic: str):
     await ctx.channel.edit(topic=topic)
     await ctx.send("📝 Topic updated.")
-
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
@@ -2264,7 +2120,6 @@ async def hidechannel(ctx):
     await ctx.channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
     await ctx.send("🙈 Channel hidden from @everyone.")
 
-
 @bot.command()
 @commands.has_permissions(manage_channels=True)
 async def showchannel(ctx):
@@ -2272,7 +2127,6 @@ async def showchannel(ctx):
     overwrite.view_channel = None
     await ctx.channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
     await ctx.send("👀 Channel visible.")
-
 
 @bot.command()
 @commands.has_permissions(manage_channels=True)
@@ -2283,6 +2137,7 @@ async def nuke(ctx):
     await ctx.channel.delete()
     await new_ch.send(f"💥 Channel nuked by {ctx.author.mention}!")
 
+# --- VOICE MANAGEMENT ---
 
 @bot.command()
 @commands.has_permissions(mute_members=True)
@@ -2290,13 +2145,11 @@ async def vcmute(ctx, member: discord.Member):
     await member.edit(mute=True)
     await ctx.send(f"🔇 VC-muted {member.mention}.")
 
-
 @bot.command()
 @commands.has_permissions(mute_members=True)
 async def vcunmute(ctx, member: discord.Member):
     await member.edit(mute=False)
     await ctx.send(f"🔊 VC-unmuted {member.mention}.")
-
 
 @bot.command()
 @commands.has_permissions(deafen_members=True)
@@ -2304,13 +2157,11 @@ async def vcdeafen(ctx, member: discord.Member):
     await member.edit(deafen=True)
     await ctx.send(f"🔇 Deafened {member.mention}.")
 
-
 @bot.command()
 @commands.has_permissions(deafen_members=True)
 async def vcundeafen(ctx, member: discord.Member):
     await member.edit(deafen=False)
     await ctx.send(f"🔉 Undeafened {member.mention}.")
-
 
 @bot.command()
 @commands.has_permissions(move_members=True)
@@ -2318,44 +2169,7 @@ async def vcdisconnect(ctx, member: discord.Member):
     await member.move_to(None)
     await ctx.send(f"⛔ Disconnected {member.mention} from voice.")
 
-
-REACTIONS = [
-    ("hug", "🤗", "hugs"),
-    ("kiss", "💋", "kisses"),
-    ("slap", "👋", "slaps"),
-    ("punch", "👊", "punches"),
-    ("pat", "🫳", "pats"),
-    ("bonk", "🔨", "bonks"),
-    ("dance", "💃", "dances with"),
-    ("cry", "😭", "cries on"),
-    ("laugh", "🤣", "laughs at"),
-    ("wave", "👋", "waves at"),
-    ("highfive", "🙌", "high-fives"),
-    ("cuddle", "🥰", "cuddles"),
-    ("blush", "😊", "blushes at"),
-    ("wink", "😉", "winks at"),
-    ("lick", "👅", "licks"),
-    ("poke", "👉", "pokes"),
-    ("salute", "🫡", "salutes"),
-    ("glare", "😠", "glares at"),
-    ("smile", "😊", "smiles at"),
-    ("applaud", "👏", "applauds"),
-]
-
-
-def make_reaction(name, emoji, action):
-    @bot.command(name=name)
-    async def _react(ctx, member: discord.Member = None):
-        if member is None or member == ctx.author:
-            await ctx.send(f"{emoji} {ctx.author.mention} {action} themselves.")
-        else:
-            await ctx.send(f"{emoji} {ctx.author.mention} {action} {member.mention}.")
-    _react.__name__ = f"reaction_{name}"
-
-
-for _n, _e, _a in REACTIONS:
-    make_reaction(_n, _e, _a)
-
+# --- QUOTES, JOKES, ETC ---
 
 JOKES = [
     "Why don't scientists trust atoms? Because they make up everything!",
@@ -2434,59 +2248,48 @@ MOTIVATE = [
     "Difficulty is the price of mastery. Push through.",
 ]
 
-
 @bot.command()
 async def joke(ctx):
     await ctx.send(random.choice(JOKES))
-
 
 @bot.command()
 async def dadjoke(ctx):
     await ctx.send(random.choice(DAD_JOKES))
 
-
 @bot.command()
 async def fact(ctx):
     await ctx.send(f"💡 {random.choice(FACTS)}")
-
 
 @bot.command()
 async def quote(ctx):
     await ctx.send(f"💬 {random.choice(QUOTES)}")
 
-
 @bot.command()
 async def advice(ctx):
     await ctx.send(f"📌 {random.choice(ADVICE)}")
 
-
 @bot.command()
 async def fortune(ctx):
     await ctx.send(f"🥠 {random.choice(FORTUNES)}")
-
 
 @bot.command()
 async def compliment(ctx, member: discord.Member = None):
     target = member or ctx.author
     await ctx.send(f"{target.mention} {random.choice(COMPLIMENTS)}")
 
-
 @bot.command()
 async def roast(ctx, member: discord.Member = None):
     target = member or ctx.author
     await ctx.send(f"{target.mention} {random.choice(ROASTS)}")
-
 
 @bot.command()
 async def pickup(ctx, member: discord.Member = None):
     target = member or ctx.author
     await ctx.send(f"{target.mention} → {random.choice(PICKUPS)}")
 
-
 @bot.command()
 async def motivate(ctx):
     await ctx.send(f"💪 {random.choice(MOTIVATE)}")
-
 
 @bot.command()
 async def highlow(ctx):
@@ -2508,7 +2311,6 @@ async def highlow(ctx):
     except asyncio.TimeoutError:
         await ctx.send(f"⏰ Time's up! It was **{n}**.")
 
-
 @bot.command()
 async def russianroulette(ctx):
     chamber = random.randint(1, 6)
@@ -2516,7 +2318,6 @@ async def russianroulette(ctx):
         await ctx.send(f"💥 BANG! {ctx.author.mention} loses.")
     else:
         await ctx.send(f"🔫 *click* — safe ({6 - chamber} chambers until reset).")
-
 
 TRUTHS = [
     "What's a secret you've never told anyone here?",
@@ -2547,27 +2348,22 @@ RIDDLES = [
     ("What gets wetter the more it dries?", "towel"),
 ]
 
-
 @bot.command()
 async def truth(ctx):
     await ctx.send(f"💭 {random.choice(TRUTHS)}")
-
 
 @bot.command()
 async def dare(ctx):
     await ctx.send(f"🎯 {random.choice(DARES)}")
 
-
 @bot.command()
 async def neverhaveiever(ctx):
     await ctx.send(random.choice(NHIE))
-
 
 @bot.command()
 async def riddle(ctx):
     q, a = random.choice(RIDDLES)
     await ctx.send(f"🧩 {q}\n||Answer: **{a}**||")
-
 
 @bot.command()
 async def mathquiz(ctx):
@@ -2589,7 +2385,6 @@ async def mathquiz(ctx):
     except asyncio.TimeoutError:
         await ctx.send(f"⏰ Time's up! Answer was **{answer}**.")
 
-
 @bot.command()
 async def lottery(ctx):
     if random.randint(1, 100) == 1:
@@ -2597,14 +2392,12 @@ async def lottery(ctx):
     else:
         await ctx.send(f"😔 No luck this time, {ctx.author.mention}. Try again!")
 
-
 SCRAMBLE_WORDS = [
     "python", "discord", "umbrella", "computer", "rainbow",
     "keyboard", "elephant", "developer", "mountain", "guitar",
     "library", "internet", "chocolate",
 ]
 scramble_games = {}
-
 
 @bot.command()
 async def scramble(ctx):
@@ -2631,25 +2424,20 @@ async def scramble(ctx):
     finally:
         scramble_games.pop(ctx.channel.id, None)
 
-
 def make_dice(sides):
     @bot.command(name=f"d{sides}")
     async def _dcmd(ctx):
         await ctx.send(f"🎲 d{sides}: **{random.randint(1, sides)}**")
     _dcmd.__name__ = f"d{sides}_cmd"
 
-
 for _s in (4, 8, 10, 12, 20, 100):
     make_dice(_s)
 
-
 CARDS = [f"{r}{s}" for r in ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"] for s in ["♠", "♥", "♦", "♣"]]
-
 
 @bot.command()
 async def card(ctx):
     await ctx.send(f"🃏 You drew: **{random.choice(CARDS)}**")
-
 
 @bot.command()
 async def rpsls(ctx, choice: str = None):
@@ -2674,6 +2462,7 @@ async def rpsls(ctx, choice: str = None):
         result = "I win! 🤖"
     await ctx.send(f"You: **{user}**\nMe: **{bot_choice}**\n{result}")
 
+# --- ECONOMY ---
 
 @bot.command()
 async def balance(ctx, member: discord.Member = None):
@@ -2684,7 +2473,6 @@ async def balance(ctx, member: discord.Member = None):
     embed.add_field(name="🏦 Bank", value=f"{e['bank']:,}", inline=True)
     embed.add_field(name="Total", value=f"{e['wallet'] + e['bank']:,}", inline=True)
     await ctx.send(embed=embed)
-
 
 @bot.command()
 async def daily(ctx):
@@ -2700,7 +2488,6 @@ async def daily(ctx):
     save_econ()
     await ctx.send(f"💰 You got **{amount}** coins!")
 
-
 @bot.command()
 async def weekly(ctx):
     e = get_econ(ctx.guild.id, ctx.author.id)
@@ -2715,12 +2502,10 @@ async def weekly(ctx):
     save_econ()
     await ctx.send(f"💰 You got **{amount}** coins!")
 
-
 JOBS = [
     ("programmer", 200, 600), ("chef", 100, 400), ("driver", 80, 300),
     ("doctor", 300, 800), ("artist", 50, 500), ("teacher", 100, 400),
 ]
-
 
 @bot.command()
 async def work(ctx):
@@ -2737,7 +2522,6 @@ async def work(ctx):
     save_econ()
     await ctx.send(f"💼 You worked as a **{job}** and earned **{amount}** coins.")
 
-
 @bot.command()
 async def beg(ctx):
     e = get_econ(ctx.guild.id, ctx.author.id)
@@ -2753,7 +2537,6 @@ async def beg(ctx):
         await ctx.send("Nobody gave you anything 😔")
     else:
         await ctx.send(f"🥺 You got **{amount}** coins.")
-
 
 @bot.command()
 async def gamble(ctx, amount: int):
@@ -2772,7 +2555,6 @@ async def gamble(ctx, amount: int):
         e["wallet"] -= amount
         save_econ()
         await ctx.send(f"💸 You lost **{amount}** coins. New balance: **{e['wallet']:,}**.")
-
 
 @bot.command()
 async def give(ctx, member: discord.Member, amount: int):
@@ -2795,7 +2577,6 @@ async def give(ctx, member: discord.Member, amount: int):
     save_econ()
     await ctx.send(f"💸 Gave **{amount}** coins to {member.mention}.")
 
-
 @bot.command()
 async def deposit(ctx, amount: str):
     e = get_econ(ctx.guild.id, ctx.author.id)
@@ -2815,7 +2596,6 @@ async def deposit(ctx, amount: str):
     save_econ()
     await ctx.send(f"🏦 Deposited **{amt}** coins.")
 
-
 @bot.command()
 async def withdraw(ctx, amount: str):
     e = get_econ(ctx.guild.id, ctx.author.id)
@@ -2834,7 +2614,6 @@ async def withdraw(ctx, amount: str):
     e["wallet"] += amt
     save_econ()
     await ctx.send(f"💵 Withdrew **{amt}** coins.")
-
 
 @bot.command()
 async def rob(ctx, member: discord.Member):
@@ -2861,7 +2640,6 @@ async def rob(ctx, member: discord.Member):
         save_econ()
         await ctx.send(f"🚓 You got caught and paid a fine of **{fine}** coins.")
 
-
 @bot.command()
 async def richest(ctx):
     g = economy.get(str(ctx.guild.id), {})
@@ -2883,7 +2661,6 @@ async def richest(ctx):
     embed = discord.Embed(title="💰 Richest members", description="\n".join(lines), color=discord.Color.gold())
     await ctx.send(embed=embed)
 
-
 SHOP = [
     {"name": "fish", "price": 50, "emoji": "🐟"},
     {"name": "sword", "price": 500, "emoji": "⚔️"},
@@ -2894,7 +2671,6 @@ SHOP = [
     {"name": "rose", "price": 75, "emoji": "🌹"},
 ]
 
-
 @bot.command()
 async def shop(ctx):
     embed = discord.Embed(title="🛒 Shop", color=discord.Color.green())
@@ -2902,7 +2678,6 @@ async def shop(ctx):
         embed.add_field(name=f"{item['emoji']} {item['name']}", value=f"{item['price']:,} coins", inline=True)
     embed.set_footer(text="Buy with !buy <item> • Sell with !sell <item>")
     await ctx.send(embed=embed)
-
 
 @bot.command()
 async def buy(ctx, *, item: str):
@@ -2920,7 +2695,6 @@ async def buy(ctx, *, item: str):
     save_econ()
     await ctx.send(f"✅ Bought {found['emoji']} **{found['name']}**.")
 
-
 @bot.command()
 async def sell(ctx, *, item: str):
     item = item.lower()
@@ -2934,7 +2708,6 @@ async def sell(ctx, *, item: str):
     e["wallet"] += price
     save_econ()
     await ctx.send(f"💸 Sold **{item}** for **{price}** coins.")
-
 
 @bot.command()
 async def inventory(ctx, member: discord.Member = None):
@@ -2950,6 +2723,7 @@ async def inventory(ctx, member: discord.Member = None):
     embed = discord.Embed(title=f"🎒 {target.display_name}'s inventory", description=text, color=discord.Color.dark_gold())
     await ctx.send(embed=embed)
 
+# --- EXTRA UTILITY ---
 
 @bot.command()
 async def firstmessage(ctx):
@@ -2957,7 +2731,6 @@ async def firstmessage(ctx):
         await ctx.send(f"📜 First message in #{ctx.channel.name}: {m.jump_url}")
         return
     await ctx.send("No messages found.")
-
 
 @bot.command(name="embed")
 async def embed_cmd(ctx, *, content: str):
@@ -2968,13 +2741,11 @@ async def embed_cmd(ctx, *, content: str):
     embed.set_footer(text=f"by {ctx.author.display_name}")
     await ctx.send(embed=embed)
 
-
 @bot.command()
 async def vote(ctx, *, question: str):
     msg = await ctx.send(f"📊 **{question}**")
     for emo in ("👍", "👎", "🤷"):
         await msg.add_reaction(emo)
-
 
 @bot.command()
 async def suggest(ctx, *, suggestion: str):
@@ -2984,66 +2755,111 @@ async def suggest(ctx, *, suggestion: str):
     for emo in ("👍", "👎"):
         await msg.add_reaction(emo)
 
+# --- THE COOLER AFK COMMAND ---
 
 @bot.command()
 async def afk(ctx, *, reason: str = "AFK"):
     if ctx.guild is None:
         await ctx.send("AFK only works in a server.")
         return
+    
+    # Cooldown to prevent spam
     key = (ctx.guild.id, ctx.author.id)
+    now = time.time()
+    if key in afk_cooldowns and (now - afk_cooldowns[key]) < 60:
+        await ctx.send("⏰ Wait a minute before changing your AFK status again.")
+        return
+
     old_nick = ctx.author.nick
+    
+    # 1. Change Nickname
     new = f"[AFK] {ctx.author.display_name}"[:32]
     try:
         await ctx.author.edit(nick=new)
     except (discord.Forbidden, discord.HTTPException):
         pass
-    afk_users[key] = {"reason": reason, "since": time.time(), "old_nick": old_nick}
+
+    # 2. Capture Image if attached (The Cooler part)
+    image_url = None
+    if ctx.message.attachments:
+        for att in ctx.message.attachments:
+            if att.content_type and "image" in att.content_type:
+                image_url = att.url
+                break
+
+    # 3. Set Discord Custom Status (The Coolest part)
+    try:
+        status_text = f"!afk {reason}"[:128]
+        new_activities = [discord.CustomActivity(name=status_text)]
+        
+        # Preserve other activities like Spotify or Playing...
+        for a in ctx.author.activities:
+            if not isinstance(a, discord.CustomActivity):
+                new_activities.append(a)
+                
+        await ctx.author.edit(activities=new_activities)
+    except Exception:
+        pass
+
+    # 4. Save data
+    afk_users[key] = {
+        "reason": reason, 
+        "since": time.time(), 
+        "old_nick": old_nick,
+        "image_url": image_url
+    }
+    afk_cooldowns[key] = now
     save_afk()
+
+    # 5. Send cool embed
     embed = discord.Embed(
         description=f"💤 {ctx.author.mention} is now **AFK**\n📝 *{reason}*",
         color=discord.Color.dark_grey(),
     )
-    embed.set_footer(text="I'll let people know when they ping you. Send any message to come back.")
+    if image_url:
+        embed.set_image(url=image_url)
+    embed.set_footer(text="I'll set your status and let people know when they ping you. Send any message to come back.")
     await ctx.send(embed=embed)
 
+# Easter egg command for AFK
+@bot.command()
+async def poke(ctx, member: discord.Member):
+    key = (ctx.guild.id, member.id)
+    if key in afk_users:
+        await ctx.send(f"🧱 You poked {member.display_name}, but they are AFK. *Talking to a brick wall...*")
+    else:
+        await ctx.send(f"👉 You poked {member.mention}!")
 
 @bot.command()
 async def github(ctx, user: str):
     await ctx.send(f"🐙 https://github.com/{user}")
-
 
 @bot.command()
 async def youtube(ctx, *, query: str):
     q = query.replace(" ", "+")
     await ctx.send(f"▶️ https://www.youtube.com/results?search_query={q}")
 
-
 @bot.command()
 async def google(ctx, *, query: str):
     q = query.replace(" ", "+")
     await ctx.send(f"🔎 https://www.google.com/search?q={q}")
-
 
 @bot.command()
 async def lmgtfy(ctx, *, query: str):
     q = query.replace(" ", "+")
     await ctx.send(f"https://lmgtfy.app/?q={q}")
 
-
 @bot.command()
 async def serverid(ctx):
     await ctx.send(f"Server ID: `{ctx.guild.id}`")
-
 
 @bot.command()
 async def channelid(ctx):
     await ctx.send(f"Channel ID: `{ctx.channel.id}`")
 
-
 @bot.command()
 async def messageid(ctx):
     await ctx.send(f"Your message ID: `{ctx.message.id}`")
-
 
 @bot.command()
 async def invite(ctx):
@@ -3052,7 +2868,6 @@ async def invite(ctx):
         await ctx.send(f"📨 {inv.url}")
     except discord.Forbidden:
         await ctx.send("I don't have permission to create invites.")
-
 
 @bot.command()
 async def about(ctx):
@@ -3065,7 +2880,6 @@ async def about(ctx):
     embed.add_field(name="Uptime", value=fmt_uptime(time.time() - START_TIME), inline=False)
     await ctx.send(embed=embed)
 
-
 @bot.command()
 async def coinstreak(ctx):
     streak = 0
@@ -3076,6 +2890,7 @@ async def coinstreak(ctx):
     flips.append("Tails")
     await ctx.send(f"🪙 Heads streak: **{streak}**\n" + " → ".join(flips))
 
+# --- HELP COMMAND ---
 
 HELP_CATEGORIES = [
     ("📊 Leveling & XP", [
@@ -3144,7 +2959,8 @@ HELP_CATEGORIES = [
         ("!embed <title> | <desc>", "Send a fancy embed message."),
         ("!vote <question>", "Create a 👍/👎/🤷 vote."),
         ("!suggest <text>", "Post a suggestion embed for voting."),
-        ("!afk [reason]", "Mark yourself as AFK with a [AFK] nickname tag."),
+        ("!afk [reason]", "Mark yourself as AFK. Supports image attachments!"),
+        ("!poke @member", "Poke a member (Easter egg if they are AFK)."),
         ("!github <user>", "Link to a GitHub profile."),
         ("!youtube <query>", "YouTube search link."),
         ("!google <query>", "Google search link."),
@@ -3321,7 +3137,6 @@ HELP_CATEGORIES = [
     ]),
 ]
 
-
 @bot.command(name="help")
 async def help_cmd(ctx, *, command_name: str = None):
     if command_name:
@@ -3376,12 +3191,10 @@ async def help_cmd(ctx, *, command_name: str = None):
     for page in pages:
         await ctx.send(embed=page)
 
-
 @bot.command()
 @commands.has_role(secret_role)
 async def secret(ctx):
     await ctx.send("Welcome to the club!")
-
 
 @secret.error
 async def secret_error(ctx, error):
@@ -3390,28 +3203,54 @@ async def secret_error(ctx, error):
 
 
 
-import sqlite3
 
-def init_db():
-    # Connect to (or create) the database file
+import discord
+import sqlite3
+from discord.ext import commands
+
+bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
+
+# Helper function to run queries
+def update_db(query, args=()):
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
-
-    # Create a simple table for user levels or currency
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            guild_id INTEGER,
-            xp INTEGER DEFAULT 0,
-            balance INTEGER DEFAULT 0
-        )
-    ''')
-
+    cursor.execute(query, args)
     conn.commit()
     conn.close()
-    print("Database initialized!")
 
-if __name__ == "__main__":
-    init_db()
+def get_db(query, args=()):
+    conn = sqlite3.connect('bot_data.db')
+    cursor = conn.cursor()
+    cursor.execute(query, args)
+    result = cursor.fetchone()
+    conn.close()
+    return result
 
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    user_id = message.author.id
+    guild_id = message.guild.id
+
+    # Check if user exists, if not, add them
+    user = get_db("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    
+    if user is None:
+        update_db("INSERT INTO users (user_id, guild_id, xp) VALUES (?, ?, ?)", (user_id, guild_id, 10))
+    else:
+        # Give them 10 XP for the message
+        update_db("UPDATE users SET xp = xp + 10 WHERE user_id = ?", (user_id,))
+
+    await bot.process_commands(message)
+
+@bot.command()
+async def rank(ctx):
+    stats = get_db("SELECT xp FROM users WHERE user_id = ?", (ctx.author.id,))
+    if stats:
+        await ctx.send(f"You have {stats[0]} XP!")
+    else:
+        await ctx.send("You aren't in the database yet. Talk a bit first!")
+        
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
