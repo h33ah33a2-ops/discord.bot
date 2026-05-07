@@ -3389,4 +3389,29 @@ async def secret_error(ctx, error):
         await ctx.send("You do not have permission to do that!")
 
 
+
+import sqlite3
+
+def init_db():
+    # Connect to (or create) the database file
+    conn = sqlite3.connect('bot_data.db')
+    cursor = conn.cursor()
+
+    # Create a simple table for user levels or currency
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            guild_id INTEGER,
+            xp INTEGER DEFAULT 0,
+            balance INTEGER DEFAULT 0
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+    print("Database initialized!")
+
+if __name__ == "__main__":
+    init_db()
+
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
