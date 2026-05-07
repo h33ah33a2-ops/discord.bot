@@ -3319,12 +3319,6 @@ HELP_CATEGORIES = [
         ("!pickup [@member]", "Send a cheesy pickup line."),
         ("!motivate", "Motivational message."),
     ]),
-    ("🤗 Reactions", [
-        ("!hug / !kiss / !slap / !punch / !pat / !bonk", "Action towards someone."),
-        ("!dance / !cry / !laugh / !wave / !highfive / !cuddle", "More action commands."),
-        ("!blush / !wink / !lick / !poke / !salute / !glare", "Even more actions."),
-        ("!smile / !applaud", "Last few actions."),
-    ]),
 ]
 
 
